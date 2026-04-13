@@ -1,0 +1,1 @@
+ALTER TABLE `activities` ADD `training_category` text;

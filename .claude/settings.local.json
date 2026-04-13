@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm init:*)",
+      "Bash(npm install:*)",
+      "Bash(npx drizzle-kit:*)",
+      "Bash(npx tsc:*)",
+      "Bash(timeout 5 npx tsx src/index.ts)",
+      "Bash(npx tsx:*)",
+      "Bash(taskkill //F //FI \"WINDOWTITLE eq node*\")",
+      "Bash(pkill -f \"tsx src/index\")",
+      "Bash(rm -rf frontend)",
+      "Bash(npm create:*)",
+      "Bash(npx vite:*)",
+      "Bash(taskkill //F //IM node.exe)",
+      "Bash(find /c/Users/diver/IdeaProjects/StravaStats/frontend/src -type f \\\\\\(-name *.tsx -o -name *.ts -o -name *.jsx -o -name *.js \\\\\\))",
+      "Bash(xargs grep:*)",
+      "Bash(find C:UsersdiverIdeaProjectsStravaStats -type f -name *.ts -o -name *.tsx -o -name *.js -o -name *.jsx -o -name *.json -o -name *.sql -o -name *.html -o -name *.css)",
+      "Bash(node -e \":*)",
+      "Bash(sqlite3 data.db \"SELECT count\\(*\\) FROM activities WHERE name = ''Morning Run'' AND distance >= 5000 AND distance <= 6000 AND average_speed >= 3.3333 AND average_speed <= 4.0;\")",
+      "Bash(node -e \"const Database = require\\(''better-sqlite3''\\); const db = new Database\\(''data.db''\\); console.log\\(db.prepare\\(\"\"SELECT training_category, count\\(*\\) as cnt FROM activities WHERE name = ''Morning Run'' AND distance >= 5000 AND distance <= 6000 AND average_speed >= 3.3333 AND average_speed <= 4.0 GROUP BY training_category\"\"\\).all\\(\\)\\);\")",
+      "Bash(node -e \"const Database = require\\(''better-sqlite3''\\); const db = new Database\\(''data.db''\\); const result = db.prepare\\(\"\"UPDATE activities SET training_category = ''WU/CD'' WHERE name = ''Morning Run'' AND distance >= 5000 AND distance <= 6000 AND average_speed >= 3.3333 AND average_speed <= 4.0\"\"\\).run\\(\\); console.log\\(''Updated:'', result.changes\\);\")",
+      "Bash(node -e \"const Database = require\\(''better-sqlite3''\\); const db = new Database\\(''data.db''\\); const r1 = db.prepare\\(\"\"UPDATE activities SET training_category = ''WU/CD'' WHERE training_category = ''Warm Up''\"\"\\).run\\(\\); const r2 = db.prepare\\(\"\"UPDATE activities SET training_category = ''WU/CD'' WHERE training_category = ''Cool Down''\"\"\\).run\\(\\); console.log\\(''Warm Up migrated:'', r1.changes, ''| Cool Down migrated:'', r2.changes\\); const r3 = db.prepare\\(\"\"UPDATE category_rules SET category = ''WU/CD'' WHERE category = ''Warm Up'' OR category = ''Cool Down''\"\"\\).run\\(\\); console.log\\(''Rules migrated:'', r3.changes\\);\")",
+      "Bash(node -e \"const Database = require\\(''better-sqlite3''\\); const db = new Database\\(''data.db''\\); console.log\\(db.prepare\\(\"\"SELECT training_category, count\\(*\\) as cnt FROM activities WHERE lower\\(name\\) LIKE ''%heat%'' GROUP BY training_category\"\"\\).all\\(\\)\\);\")"
+    ]
+  }
+}

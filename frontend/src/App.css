@@ -1,0 +1,350 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  line-height: 1.6;
+}
+
+a {
+  color: #60a5fa;
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Login page */
+.login-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 1rem;
+}
+.login-page h1 {
+  font-size: 2.5rem;
+  color: #f97316;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: 1.2rem;
+}
+
+/* Navbar */
+.navbar {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+  padding: 0.75rem 1.5rem;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+}
+.nav-brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f97316;
+}
+.nav-brand:hover {
+  text-decoration: none;
+}
+.nav-links {
+  display: flex;
+  gap: 1rem;
+}
+.nav-links a {
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+.nav-links a:hover {
+  color: #e2e8f0;
+  text-decoration: none;
+}
+.nav-user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+}
+
+/* Layout */
+.main-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.page h1 {
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+}
+
+/* Cards */
+.card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+.card h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.75rem;
+  color: #f1f5f9;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+.card-header h2 {
+  margin-bottom: 0;
+}
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border: 1px solid #475569;
+  background: #334155;
+  color: #e2e8f0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+.btn:hover {
+  background: #475569;
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn-primary {
+  background: #f97316;
+  border-color: #f97316;
+  color: #fff;
+}
+.btn-primary:hover {
+  background: #ea580c;
+}
+.btn-sm {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+.btn-danger {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+.btn-danger:hover {
+  background: #b91c1c;
+}
+
+/* Forms */
+.form-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+input[type="text"],
+input[type="date"],
+select {
+  padding: 0.5rem 0.75rem;
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  color: #e2e8f0;
+  font-size: 0.875rem;
+}
+input[type="text"]:focus,
+select:focus {
+  outline: none;
+  border-color: #60a5fa;
+}
+input[type="color"] {
+  width: 40px;
+  height: 36px;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  cursor: pointer;
+  background: transparent;
+}
+
+/* Filters */
+.filters {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* Tables */
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.activity-table th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 2px solid #334155;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+}
+.sortable-th:hover {
+  color: #e2e8f0;
+}
+.activity-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #1e293b;
+}
+.activity-table tr:hover td {
+  background: #1e293b;
+}
+.activity-table tr.row-selected td {
+  background: #1e3a5f;
+}
+
+/* Inline name editing */
+.edit-icon {
+  margin-left: 0.4rem;
+  cursor: pointer;
+  color: #475569;
+  font-size: 0.8rem;
+}
+.edit-icon:hover {
+  color: #60a5fa;
+}
+.name-edit {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.name-edit input[type="text"] {
+  width: 180px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+/* Bulk action bar */
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.25rem;
+  background: #1e3a5f;
+  border-color: #2563eb;
+}
+
+/* Pagination */
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+/* Sync result */
+.sync-result {
+  margin-top: 0.75rem;
+  padding: 0.5rem;
+  background: #1e3a5f;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+
+/* Activity detail */
+.detail-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 1rem;
+}
+.detail-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.detail-stat-label {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.detail-stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #f1f5f9;
+}
+
+/* Category dropdown in activities table */
+.category-select {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  padding: 0.15rem 0.25rem;
+  border-radius: 4px;
+  cursor: pointer;
+  max-width: 140px;
+}
+.category-select:hover,
+.category-select:focus {
+  border-color: #475569;
+  background: #0f172a;
+  outline: none;
+}
+
+/* Lap name editing */
+.lap-name-display {
+  cursor: pointer;
+  border-bottom: 1px dashed #475569;
+}
+.lap-name-display:hover {
+  color: #60a5fa;
+}
+.lap-original-name {
+  color: #64748b;
+  font-size: 0.75rem;
+}
+.lap-name-edit {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.lap-name-edit input[type="text"] {
+  width: 140px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* Recharts overrides */
+.recharts-cartesian-grid-horizontal line,
+.recharts-cartesian-grid-vertical line {
+  stroke: #334155;
+}
+.recharts-text {
+  fill: #94a3b8;
+}
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #1e293b !important;
+  border: 1px solid #475569 !important;
+  border-radius: 6px;
+}

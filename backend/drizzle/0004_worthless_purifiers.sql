@@ -1,0 +1,1 @@
+ALTER TABLE `activities` ADD `start_date_local` text;
