@@ -25,6 +25,19 @@ export const syncActivities = () => request<{ synced: number }>("/api/sync", { m
 export const getSyncStatus = () =>
   request<{ lastSync: string | null; activityCount: number }>("/api/sync/status");
 
+export interface SyncLapsByIdResponse {
+  synced: number;
+  failed: number;
+  errors: { activityId: number; error: string }[];
+  lapsByActivity: Record<number, AILap[]>;
+}
+
+export const syncLapsForActivities = (activityIds: number[]) =>
+  request<SyncLapsByIdResponse>("/api/sync/laps/by-id", {
+    method: "POST",
+    body: JSON.stringify({ activityIds }),
+  });
+
 export interface AILap {
   activityId: number;
   lapIndex: number;
@@ -58,29 +71,43 @@ export interface AIActivity {
   laps: AILap[];
 }
 
-export interface AIQueryResponse {
-  answer: string;
-  activitiesAnalysed: number;
-  totalMatching?: number;
-  truncated?: boolean;
-  maxActivities?: number;
-  filters: Record<string, unknown>;
-  from?: string | null;
-  to?: string | null;
+// Filtered activities (table data — no AI involvement)
+export interface ActivitiesQueryResponse {
   activities: AIActivity[];
+  totalMatching: number;
+  truncated: boolean;
+  maxActivities: number;
+  from: string | null;
+  to: string | null;
+  categories: string[] | null;
 }
 
-export const queryAI = (
-  question: string,
-  opts?: { from?: string; to?: string }
-) =>
-  request<AIQueryResponse>("/api/ai/query", {
+export const fetchFilteredActivities = (opts: {
+  categories?: string[];
+  from?: string;
+  to?: string;
+}) =>
+  request<ActivitiesQueryResponse>("/api/ai/activities", {
     method: "POST",
     body: JSON.stringify({
-      question,
-      from: opts?.from || undefined,
-      to: opts?.to || undefined,
+      categories: opts.categories,
+      from: opts.from || undefined,
+      to: opts.to || undefined,
     }),
+  });
+
+// AI insight on a specific filtered + selected set of activities
+export interface AIInsightResponse {
+  answer: string;
+  activitiesAnalysed: number;
+  truncated: boolean;
+  maxActivities: number;
+}
+
+export const getAIInsight = (question: string, activityIds: number[]) =>
+  request<AIInsightResponse>("/api/ai/insights", {
+    method: "POST",
+    body: JSON.stringify({ question, activityIds }),
   });
 
 // Activities

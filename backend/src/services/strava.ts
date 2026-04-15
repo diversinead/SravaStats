@@ -162,6 +162,42 @@ export async function fetchActivityLaps(
   return res.json() as Promise<StravaLap[]>;
 }
 
+// Strava's per-km auto-split, returned by the /activities/{id} detail
+// endpoint (NOT the /laps endpoint, which only contains user-pressed laps).
+// One entry per km of the activity, populated even when the athlete didn't
+// manually lap their watch — exactly what we need for per-km comparison of
+// continuous threshold / tempo / easy runs.
+export interface StravaSplit {
+  distance: number;        // metres (typically 1000)
+  elapsed_time: number;
+  moving_time: number;
+  split: number;           // 1-based index
+  average_speed: number;
+  average_heartrate?: number;
+  pace_zone?: number;
+}
+
+interface StravaActivityDetail {
+  id: number;
+  laps?: StravaLap[];
+  splits_metric?: StravaSplit[];
+  splits_standard?: StravaSplit[];
+}
+
+export async function fetchActivityDetail(
+  userId: number,
+  activityId: number
+): Promise<StravaActivityDetail> {
+  const token = await refreshAccessToken(userId);
+  const res = await fetch(`${STRAVA_API}/activities/${activityId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Strava API error: ${res.status}`);
+  }
+  return res.json() as Promise<StravaActivityDetail>;
+}
+
 export function upsertUser(tokenData: StravaTokenResponse) {
   const { athlete, access_token, refresh_token, expires_at } = tokenData;
 

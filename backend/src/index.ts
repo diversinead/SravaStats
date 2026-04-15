@@ -14,7 +14,6 @@ import authRoutes from "./routes/auth.js";
 import syncRoutes from "./routes/sync.js";
 import activityRoutes from "./routes/activities.js";
 import ruleRoutes from "./routes/rules.js";
-import metricRoutes from "./routes/metrics.js";
 import aiRoutes from "./routes/ai.js";
 
 const app = express();
@@ -49,7 +48,6 @@ app.use("/auth", authRoutes);
 app.use("/api/sync", syncRoutes);
 app.use("/api/activities", activityRoutes);
 app.use("/api/rules", ruleRoutes);
-app.use("/api/metrics", metricRoutes);
 app.use("/api/ai", aiRoutes);
 
 app.get("/api/health", (_req, res) => {

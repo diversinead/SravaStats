@@ -10,89 +10,102 @@ const router = Router();
 // budget. UI surfaces the count back to the user so they can narrow the range.
 const MAX_ACTIVITIES = 500;
 
-interface QueryFilters {
-  dayOfWeek?: string;
-  sessionTypes?: string[];
-}
+function buildActivityConditions(
+  userId: number,
+  opts: { categories?: string[]; from?: string; to?: string }
+): any[] {
+  const conditions: any[] = [eq(schema.activities.userId, userId)];
 
-async function extractFilters(openai: OpenAI, question: string): Promise<QueryFilters> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini", // cheap model for filter extraction
-    max_tokens: 150,
-    messages: [
-      {
-        role: "system",
-        content: `Extract query filters from a training question. Respond ONLY with valid JSON, no markdown.
-
-Valid sessionTypes: easy, long, interval, threshold, warmup, crosstraining, race
-Valid dayOfWeek: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
-
-Example output:
-{"dayOfWeek": "Tuesday", "sessionTypes": ["interval", "threshold"]}
-
-If no specific day mentioned, omit dayOfWeek.
-If no specific session type mentioned, omit sessionTypes.
-Do NOT extract date ranges — those are supplied separately by the UI.`,
-      },
-      { role: "user", content: question },
-    ],
-  });
-
-  try {
-    const text = response.choices[0]?.message?.content ?? "{}";
-    return JSON.parse(text) as QueryFilters;
-  } catch {
-    return {};
+  if (opts.categories && opts.categories.length > 0) {
+    conditions.push(
+      inArray(schema.activities.trainingCategory, opts.categories)
+    );
   }
+  // Date range applied against startDateLocal (athlete's local date). The
+  // YYYY-MM-DD prefix lexicographically compares correctly against the
+  // ISO-8601 string stored in the column.
+  if (opts.from && /^\d{4}-\d{2}-\d{2}$/.test(opts.from)) {
+    conditions.push(gte(schema.activities.startDateLocal, opts.from));
+  }
+  if (opts.to && /^\d{4}-\d{2}-\d{2}$/.test(opts.to)) {
+    conditions.push(
+      lte(schema.activities.startDateLocal, nextDayIso(opts.to))
+    );
+  }
+  return conditions;
 }
 
-router.post("/query", requireAuth, async (req, res) => {
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function fetchActivitiesByConditions(conditions: any[]) {
+  return db
+    .select({
+      id: schema.activities.id,
+      name: schema.activities.name,
+      sportType: schema.activities.sportType,
+      sessionType: schema.activities.sessionType,
+      trainingCategory: schema.activities.trainingCategory,
+      dayOfWeek: schema.activities.dayOfWeek,
+      startDateLocal: schema.activities.startDateLocal,
+      distance: schema.activities.distance,
+      movingTime: schema.activities.movingTime,
+      averageSpeed: schema.activities.averageSpeed,
+      averageHeartrate: schema.activities.averageHeartrate,
+      maxHeartrate: schema.activities.maxHeartrate,
+      averageCadence: schema.activities.averageCadence,
+      totalElevationGain: schema.activities.totalElevationGain,
+      sufferScore: schema.activities.sufferScore,
+    })
+    .from(schema.activities)
+    .where(and(...conditions))
+    .orderBy(desc(schema.activities.startDateLocal))
+    .limit(MAX_ACTIVITIES)
+    .all();
+}
+
+function fetchLapsByActivityIds(ids: number[]) {
+  if (ids.length === 0) return {} as Record<number, any[]>;
+  const rows = db
+    .select({
+      activityId: schema.laps.activityId,
+      lapIndex: schema.laps.lapIndex,
+      name: schema.laps.name,
+      customName: schema.laps.customName,
+      distance: schema.laps.distance,
+      movingTime: schema.laps.movingTime,
+      averageSpeed: schema.laps.averageSpeed,
+      averageHeartrate: schema.laps.averageHeartrate,
+      maxHeartrate: schema.laps.maxHeartrate,
+      averageCadence: schema.laps.averageCadence,
+      lapType: schema.laps.lapType,
+    })
+    .from(schema.laps)
+    .where(inArray(schema.laps.activityId, ids))
+    .all();
+  const grouped: Record<number, typeof rows> = {};
+  for (const lap of rows) {
+    if (!grouped[lap.activityId]) grouped[lap.activityId] = [];
+    grouped[lap.activityId].push(lap);
+  }
+  return grouped;
+}
+
+// POST /api/ai/activities  body: { categories?: string[]; from?: string; to?: string }
+// Returns the user's filtered activities + their laps. No AI involvement —
+// this is the data source for the table on the AI Coach page.
+router.post("/activities", requireAuth, async (req, res) => {
   const userId = (req as any).userId as number;
-  const { question, from, to } = req.body as {
-    question: string;
-    from?: string; // YYYY-MM-DD inclusive
-    to?: string;   // YYYY-MM-DD inclusive
+  const { categories, from, to } = req.body as {
+    categories?: string[];
+    from?: string;
+    to?: string;
   };
 
-  if (!question?.trim()) {
-    res.status(400).json({ error: "question is required" });
-    return;
-  }
-
   try {
-    // Stage 1: extract filters from the question using cheap model
-    const filters = await extractFilters(openai, question);
-    console.log("Extracted filters:", filters, "Date range:", { from, to });
+    const conditions = buildActivityConditions(userId, {
+      categories,
+      from,
+      to,
+    });
 
-    // Stage 2: build filtered DB query
-    const conditions: any[] = [eq(schema.activities.userId, userId)];
-
-    if (filters.dayOfWeek) {
-      conditions.push(eq(schema.activities.dayOfWeek, filters.dayOfWeek));
-    }
-    if (filters.sessionTypes?.length) {
-      conditions.push(inArray(schema.activities.sessionType, filters.sessionTypes));
-    }
-
-    // Date range applied against startDateLocal (athlete's local date). The
-    // YYYY-MM-DD prefix lexicographically compares correctly against the
-    // ISO-8601 string stored in the column. `to` is inclusive — bump it to
-    // the start of the next day so a "to: 2026-04-15" query catches anything
-    // that happened on Apr 15 itself.
-    if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) {
-      conditions.push(gte(schema.activities.startDateLocal, from));
-    }
-    if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) {
-      // Exclusive upper bound on the next day, so e.g. to=2026-04-15 includes
-      // activities with startDateLocal "2026-04-15T18:30:00".
-      const nextDay = nextDayIso(to);
-      conditions.push(lte(schema.activities.startDateLocal, nextDay));
-    }
-
-    // Count first so we can warn the user when the range is too wide.
-    // Using a separate count query would be cleaner; doing a fetch + slice is
-    // fine at this scale.
     const allMatching = db
       .select({ id: schema.activities.id })
       .from(schema.activities)
@@ -101,72 +114,74 @@ router.post("/query", requireAuth, async (req, res) => {
     const totalMatching = allMatching.length;
     const truncated = totalMatching > MAX_ACTIVITIES;
 
-    const activities = db
-      .select({
-        id: schema.activities.id,
-        name: schema.activities.name,
-        sportType: schema.activities.sportType,
-        sessionType: schema.activities.sessionType,
-        trainingCategory: schema.activities.trainingCategory,
-        dayOfWeek: schema.activities.dayOfWeek,
-        startDateLocal: schema.activities.startDateLocal,
-        distance: schema.activities.distance,
-        movingTime: schema.activities.movingTime,
-        averageSpeed: schema.activities.averageSpeed,
-        averageHeartrate: schema.activities.averageHeartrate,
-        maxHeartrate: schema.activities.maxHeartrate,
-        averageCadence: schema.activities.averageCadence,
-        totalElevationGain: schema.activities.totalElevationGain,
-        sufferScore: schema.activities.sufferScore,
-      })
-      .from(schema.activities)
-      .where(and(...conditions))
-      .orderBy(desc(schema.activities.startDateLocal))
-      .limit(MAX_ACTIVITIES)
-      .all();
-
-    // Pull laps only for the filtered activities
-    const activityIds = activities.map((a) => a.id);
-    const laps = activityIds.length
-      ? db
-          .select({
-            activityId: schema.laps.activityId,
-            lapIndex: schema.laps.lapIndex,
-            name: schema.laps.name,
-            customName: schema.laps.customName,
-            distance: schema.laps.distance,
-            movingTime: schema.laps.movingTime,
-            averageSpeed: schema.laps.averageSpeed,
-            averageHeartrate: schema.laps.averageHeartrate,
-            maxHeartrate: schema.laps.maxHeartrate,
-            averageCadence: schema.laps.averageCadence,
-            lapType: schema.laps.lapType,
-          })
-          .from(schema.laps)
-          .where(inArray(schema.laps.activityId, activityIds))
-          .all()
-      : [];
-
-    // Group laps by activityId
-    const lapsByActivity = laps.reduce(
-      (acc: Record<number, typeof laps>, lap) => {
-        if (!acc[lap.activityId]) acc[lap.activityId] = [];
-        acc[lap.activityId].push(lap);
-        return acc;
-      },
-      {}
-    );
-
-    // Attach laps to activities
-    const enrichedActivities = activities.map((a) => ({
+    const activities = fetchActivitiesByConditions(conditions);
+    const lapsByActivity = fetchLapsByActivityIds(activities.map((a) => a.id));
+    const enriched = activities.map((a) => ({
       ...a,
       laps: lapsByActivity[a.id] ?? [],
     }));
 
-    console.log(`Sending ${enrichedActivities.length} activities to GPT-4o`);
+    res.json({
+      activities: enriched,
+      totalMatching,
+      truncated,
+      maxActivities: MAX_ACTIVITIES,
+      from: from ?? null,
+      to: to ?? null,
+      categories: categories ?? null,
+    });
+  } catch (err: any) {
+    console.error("AI activities query error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    // Stage 3: answer the question with filtered data
-    const systemPrompt = `You are an expert running coach AI analysing an athlete's training data.
+// POST /api/ai/insights  body: { question, activityIds }
+// Sends a specific set of activities (already chosen by the user via filters
+// + selection) to OpenAI for a coaching insight. No filter extraction stage —
+// the user picked the scope.
+router.post("/insights", requireAuth, async (req, res) => {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const userId = (req as any).userId as number;
+  const { question, activityIds } = req.body as {
+    question: string;
+    activityIds: number[];
+  };
+
+  if (!question?.trim()) {
+    res.status(400).json({ error: "question is required" });
+    return;
+  }
+  if (!Array.isArray(activityIds) || activityIds.length === 0) {
+    res.status(400).json({ error: "activityIds must be a non-empty array" });
+    return;
+  }
+
+  // Cap the set sent to OpenAI; surface to the caller so the UI can warn.
+  const cappedIds = activityIds.slice(0, MAX_ACTIVITIES);
+  const truncated = activityIds.length > MAX_ACTIVITIES;
+
+  // Re-fetch from the DB. Important for security (verify userId owns these
+  // activities) and to get fresh laps without trusting client-side data.
+  const conditions = [
+    eq(schema.activities.userId, userId),
+    inArray(schema.activities.id, cappedIds),
+  ];
+  const activities = fetchActivitiesByConditions(conditions);
+  const lapsByActivity = fetchLapsByActivityIds(activities.map((a) => a.id));
+  const enriched = activities.map((a) => ({
+    ...a,
+    laps: lapsByActivity[a.id] ?? [],
+  }));
+
+  if (enriched.length === 0) {
+    res
+      .status(404)
+      .json({ error: "no matching activities found for those ids" });
+    return;
+  }
+
+  const systemPrompt = `You are an expert running coach AI analysing an athlete's training data.
 
 Key data notes:
 - Speed is stored in m/s. Convert to pace with: paceSecPerKm = 1000 / speed, then format as M:SS /km
@@ -175,55 +190,38 @@ Key data notes:
 - dayOfWeek is the local day the session was performed.
 - sessionType values: easy, long, interval, threshold, warmup, crosstraining, race
 - trainingCategory is the athlete's own label (e.g. "Track Workout", "Easy Run", "Threshold")
-- laps array contains per-rep data for interval/threshold sessions
+- laps array contains per-rep / per-km data. lapType="split" means Strava's
+  per-km auto-split (continuous threshold/easy/long); lapType=null means
+  user-pressed lap (interval rep boundaries).
 
-How to answer (IMPORTANT — the user sees the full per-session and per-rep
-breakdown in a table directly below your answer):
+How to answer (IMPORTANT — the user has ALREADY filtered the activities
+they care about via UI controls. They can also see the full per-session and
+per-rep breakdown in a table directly below your answer):
 
-- Give a HIGH-LEVEL SUMMARY only. Do NOT enumerate sessions one by one and do
-  NOT list every rep with its pace/HR/distance — that detail is in the table.
-- Focus on the answer to the question: counts, averages, ranges, trends,
-  notable patterns, standout sessions.
-- Use specific numbers for the headline insights (e.g. "averaged 3:05/km
-  across 24 reps", "fastest mile rep dropped from 5:12 to 4:58 over 3 months"),
-  but skip per-row data.
-- If comparing sessions or periods, lead with the trend, then back it up with
-  one or two key numbers — not a per-session list.
+- Give a HIGH-LEVEL SUMMARY only. Do NOT enumerate sessions one by one and
+  do NOT list every rep with its pace/HR/distance — that detail is in the
+  table.
+- Focus on the question: counts, averages, ranges, trends, notable patterns,
+  standout sessions across the filtered set.
+- Use specific numbers for the headline insights (e.g. "averaged \`3:35/km\`
+  across 24 threshold reps", "fastest mile dropped from \`5:12\` to
+  \`4:58\`"), but skip per-row data.
 
-FORMAT for visual readability — the answer is rendered as styled markdown,
-so use the structure to break up the wall of text:
+FORMAT for visual readability (rendered as styled markdown):
 
 - Open with a 1-line **TL;DR** (bold) summarising the headline finding.
-- Use \`## Section headers\` (with a leading emoji) to group findings — at most
-  3–4 sections. Examples: \`## 📊 Volume\`, \`## ⚡ Pace trends\`,
+- Use \`## Section headers\` with a leading emoji to group findings (max 3–4
+  sections). Examples: \`## 📊 Volume\`, \`## ⚡ Pace trends\`,
   \`## ❤️ Heart rate\`, \`## 🏆 Standouts\`, \`## 🎯 Takeaways\`.
-- Use bullet lists (\`- item\`) inside each section. Keep bullets to 1 line.
-- Wrap key numeric values in backticks (\`3:05/km\`, \`24 reps\`, \`+8%\`)
-  so they pop visually.
-- Use a blockquote (\`> coach's note\`) at most once for a one-line takeaway
-  the athlete should remember.
-- Sprinkle emojis only in headers and rare emphasis (📈 📉 🔥 ✅ ⚠️) — not
-  inside every bullet.
+- Use bullet lists (\`- item\`). Keep bullets to 1 line.
+- Wrap key numeric values in backticks (\`3:35/km\`, \`24 reps\`, \`+8%\`).
+- Use a blockquote (\`> coach's note\`) at most once for the takeaway.
+- Use realistic competitive-runner numbers when relevant — the athlete runs
+  threshold around 3:30–3:40/km, so pick examples accordingly.`;
 
-Example skeleton (do not copy verbatim — adapt to the question):
+  const scopeNote = `\n\nScope: ${enriched.length} activities pre-filtered by the user${truncated ? ` (capped from ${activityIds.length}).` : "."}`;
 
-**TL;DR:** Threshold pace has improved by ~6s/km over the last 3 months.
-
-## ⚡ Pace trends
-- Avg threshold pace: \`3:42/km\` (down from \`3:48/km\` in Jan)
-- Fastest single rep: \`3:28/km\` on 12 Mar
-
-## ❤️ Heart rate
-- Avg HR at threshold: \`168 bpm\` (steady — no drift)
-
-> Big aerobic gain — same HR, faster pace.`;
-
-    // Hand the model the explicit scope so it doesn't make up timeframes.
-    const scopeNote =
-      from || to
-        ? `\n\nScope: only activities between ${from ?? "the earliest record"} and ${to ?? "today"}${truncated ? ` (truncated to the most recent ${MAX_ACTIVITIES} of ${totalMatching} matching).` : "."}`
-        : `\n\nScope: most recent ${enrichedActivities.length} matching activities${truncated ? ` (truncated from ${totalMatching}).` : "."}`;
-
+  try {
     const response = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       max_tokens: 2000,
@@ -231,7 +229,7 @@ Example skeleton (do not copy verbatim — adapt to the question):
         { role: "system", content: systemPrompt },
         {
           role: "user",
-          content: `Training data (${enrichedActivities.length} activities):${scopeNote}\n${JSON.stringify(enrichedActivities)}\n\nQuestion: ${question}`,
+          content: `Training data (${enriched.length} activities):${scopeNote}\n${JSON.stringify(enriched)}\n\nQuestion: ${question}`,
         },
       ],
     });
@@ -239,17 +237,12 @@ Example skeleton (do not copy verbatim — adapt to the question):
     const answer = response.choices[0]?.message?.content ?? "";
     res.json({
       answer,
-      activitiesAnalysed: enrichedActivities.length,
-      totalMatching,
+      activitiesAnalysed: enriched.length,
       truncated,
       maxActivities: MAX_ACTIVITIES,
-      filters,
-      from: from ?? null,
-      to: to ?? null,
-      activities: enrichedActivities,
     });
   } catch (err: any) {
-    console.error("AI query error:", err);
+    console.error("AI insights error:", err);
     res.status(500).json({ error: err.message });
   }
 });
