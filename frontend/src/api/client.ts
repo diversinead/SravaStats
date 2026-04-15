@@ -71,6 +71,41 @@ export const queryAI = (question: string) =>
     body: JSON.stringify({ question }),
   });
 
+// Saved AI answers
+export interface SavedAIAnswerSummary {
+  id: number;
+  question: string;
+  activitiesAnalysed: number;
+  savedAt: string | null;
+}
+
+export interface SavedAIAnswer extends AIQueryResponse {
+  id: number;
+  question: string;
+  savedAt: string | null;
+}
+
+export const saveAIAnswer = (payload: {
+  question: string;
+  answer: string;
+  activitiesAnalysed: number;
+  filters: Record<string, unknown>;
+  activityIds: number[];
+}) =>
+  request<{ id: number; savedAt: string | null }>("/api/ai/saved", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+export const getSavedAIAnswers = () =>
+  request<{ saved: SavedAIAnswerSummary[] }>("/api/ai/saved");
+
+export const getSavedAIAnswer = (id: number) =>
+  request<SavedAIAnswer>(`/api/ai/saved/${id}`);
+
+export const deleteSavedAIAnswer = (id: number) =>
+  request<{ deleted: number }>(`/api/ai/saved/${id}`, { method: "DELETE" });
+
 // Activities
 export interface Activity {
   id: number;
