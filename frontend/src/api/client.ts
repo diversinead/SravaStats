@@ -61,50 +61,27 @@ export interface AIActivity {
 export interface AIQueryResponse {
   answer: string;
   activitiesAnalysed: number;
+  totalMatching?: number;
+  truncated?: boolean;
+  maxActivities?: number;
   filters: Record<string, unknown>;
+  from?: string | null;
+  to?: string | null;
   activities: AIActivity[];
 }
 
-export const queryAI = (question: string) =>
+export const queryAI = (
+  question: string,
+  opts?: { from?: string; to?: string }
+) =>
   request<AIQueryResponse>("/api/ai/query", {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({
+      question,
+      from: opts?.from || undefined,
+      to: opts?.to || undefined,
+    }),
   });
-
-// Saved AI answers
-export interface SavedAIAnswerSummary {
-  id: number;
-  question: string;
-  activitiesAnalysed: number;
-  savedAt: string | null;
-}
-
-export interface SavedAIAnswer extends AIQueryResponse {
-  id: number;
-  question: string;
-  savedAt: string | null;
-}
-
-export const saveAIAnswer = (payload: {
-  question: string;
-  answer: string;
-  activitiesAnalysed: number;
-  filters: Record<string, unknown>;
-  activityIds: number[];
-}) =>
-  request<{ id: number; savedAt: string | null }>("/api/ai/saved", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-export const getSavedAIAnswers = () =>
-  request<{ saved: SavedAIAnswerSummary[] }>("/api/ai/saved");
-
-export const getSavedAIAnswer = (id: number) =>
-  request<SavedAIAnswer>(`/api/ai/saved/${id}`);
-
-export const deleteSavedAIAnswer = (id: number) =>
-  request<{ deleted: number }>(`/api/ai/saved/${id}`, { method: "DELETE" });
 
 // Activities
 export interface Activity {

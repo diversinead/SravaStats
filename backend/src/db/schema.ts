@@ -82,17 +82,6 @@ export const garminActivities = sqliteTable("garmin_activities", {
   syncedAt: text("synced_at").default(sql`(datetime('now'))`),
 });
 
-export const savedAiAnswers = sqliteTable("saved_ai_answers", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  userId: integer("user_id").notNull().references(() => users.id),
-  question: text("question").notNull(),
-  answer: text("answer").notNull(),
-  activitiesAnalysed: integer("activities_analysed").notNull(),
-  filtersJson: text("filters_json").notNull(), // JSON-encoded filters
-  activityIdsJson: text("activity_ids_json").notNull(), // JSON array of activity IDs
-  savedAt: text("saved_at").default(sql`(datetime('now'))`),
-});
-
 export const categoryRules = sqliteTable("category_rules", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id")
