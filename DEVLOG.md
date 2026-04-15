@@ -13,7 +13,7 @@ Build a personal training analytics app that connects to Strava (and eventually 
 - **Backend:** Node.js + TypeScript + Express (`/backend`)
 - **ORM:** Drizzle ORM
 - **Database:** SQLite (`data.db`) via better-sqlite3
-- **AI:** Anthropic Claude API (`claude-opus-4-5`)
+- **AI:** OpenAI API (`gpt-4.1-mini` for analysis, `gpt-4o-mini` for filter extraction)
 - **Auth:** Strava OAuth, httpOnly cookie (`strava_user_id`)
 
 ---
@@ -37,55 +37,68 @@ Build a personal training analytics app that connects to Strava (and eventually 
    - One-time script to reclassify all existing activities
    - Safe to re-run — never touches `name` or `trainingCategory`
    - Run with: `npx tsx src/backfill.ts` from `/backend`
-   - Result: 4,926 activities classified (easy: 2271, warmup: 957, long: 734, threshold: 441, interval: 255, crosstraining: 235, race: 16, default: 17)
+   - Final result: 4,926 activities classified:
+     - easy: 2271, warmup: 957, long: 734, threshold: 441, interval: 255, crosstraining: 235, race: 16, default: 17
 
 4. **Bulk lap sync** (`backend/src/routes/sync.ts`)
    - New endpoint: `POST /api/sync/laps`
    - Syncs laps from Strava for all `sessionType = 'interval'` activities where `lapsSynced = 0`
    - Picks up where it left off if interrupted (safe to re-run)
    - ⚠️ Strava rate limit: 100 requests per 15 min — if it hangs, wait 15 min and re-POST
+   - ✅ All 255 interval sessions fully synced
 
-5. **AI query route** (`backend/src/routes/ai.ts`) ✅ Written, needs wiring up
+5. **AI query route** (`backend/src/routes/ai.ts`) ✅ Complete & working
    - Endpoint: `POST /api/ai/query`
    - Body: `{ "question": "your question here" }`
-   - Pulls last 500 activities + all laps, sends to Claude with coaching system prompt
-   - Converts m/s to pace, metres to km automatically in the prompt
+   - **Two-stage approach:**
+     - Stage 1: `gpt-4o-mini` extracts filters (dayOfWeek, sessionTypes) from the question — cheap
+     - Stage 2: DB queried with filters (max 50 activities) — keeps token count low
+     - Stage 3: `gpt-4.1-mini` answers the question with filtered enriched data
+   - Returns: `{ answer, activitiesAnalysed, filters }`
+   - Registered in `index.ts` as `app.use("/api/ai", aiRoutes)`
 
-### Pending From This Session
-- [ ] Lap sync still has ~122 interval sessions remaining (hit Strava rate limit)
-  - Re-run `POST /api/sync/laps` after rate limit resets (15 min window)
-  - Check progress: `SELECT COUNT(*) FROM activities WHERE session_type = 'interval' AND laps_synced = 0;`
-- [ ] Register `ai.ts` in `backend/src/index.ts`:
-  ```typescript
-  import aiRoutes from "./routes/ai.js";
-  app.use("/api/ai", aiRoutes);
-  ```
-- [ ] Test AI query in Postman:
-  - POST `http://localhost:3001/api/ai/query`
-  - Header: `Cookie: strava_user_id=28501411`
-  - Body: `{ "question": "Show me all my Tuesday interval sessions" }`
+6. **AI Coach UI** (`frontend/src/pages/Coach.tsx` + `Coach.css`) ✅ Complete & working
+   - Route: `/coach`
+   - Chat interface with suggestion chips on empty state
+   - Typing indicator while waiting for response
+   - Renders markdown responses (headers, bold, lists, hr)
+   - Shows "Analysed X activities · Filters: ..." metadata per response
+   - Styled to match dark theme (`#0f172a` background, `#f97316` orange accent)
+   - Added to `App.tsx` routes and `Layout.tsx` nav
 
 ---
 
-## Next Steps (Session 2)
+## Session 2 — AI Query Layer & Chat UI
+
+### What Was Built
+- Switched from Anthropic API to OpenAI API (work account blocks Anthropic API credits)
+- Two-stage query approach to stay within OpenAI TPM limits
+- Full chat UI built and working
+- Dark theme CSS matching existing app styles
+
+### Current State
+- ✅ Ask natural language questions about training
+- ✅ Filters correctly to relevant sessions (day, session type)
+- ✅ Breaks down interval reps with pace, HR, distance
+- ✅ Trend analysis across sessions
+
+---
+
+## Next Steps (Session 3)
 
 ### Immediate
-1. Finish lap sync
-2. Wire up and test `ai.ts`
-3. Build simple chat UI in frontend (`frontend/src/components/AiChat.tsx`)
-   - Text input + submit button
-   - Calls `POST /api/ai/query`
-   - Displays formatted response
+1. **Session detail improvements** — when AI references a session, make it linkable to `/activities/:id`
+2. **Conversation history** — currently each query is stateless; add multi-turn conversation so follow-up questions work (e.g. "now compare that to last year")
 
 ### Soon After
-4. **Session detail view** — show a single interval session with rep breakdown table (pace, HR, distance per lap)
-5. **Session comparison** — find similar sessions (same sessionType, similar distance) and compare side by side
-6. **Map view** — render polylines using Leaflet.js, colour-coded by pace
-7. **Trend charts** — pace/HR over time per session type (Recharts)
+3. **Session comparison view** — find similar sessions (same sessionType, similar distance) and compare side by side with a table/chart
+4. **Map view** — render polylines using Leaflet.js on activity detail page, colour-coded by pace
+5. **Trend charts** — pace/HR over time per session type (Recharts already installed)
+6. **Threshold lap sync** — currently only `interval` sessions have laps synced; run bulk sync for `threshold` sessions too
 
 ### Later (Garmin)
 - Garmin Connect adds: running power, HRV, training load, ground contact time, vertical oscillation
-- Library: `garminconnect` (npm) — `python-garminconnect` equivalent for Node
+- Library: `garminconnect` (npm)
 - New service: `backend/src/services/garmin.ts`
 - Link Garmin activities to Strava activities by matching timestamp
 - **Hold off until Strava data layer is fully working**
@@ -98,7 +111,7 @@ Build a personal training analytics app that connects to Strava (and eventually 
 # Start backend (from /backend)
 npm run dev
 
-# Start frontend (from /frontend)  
+# Start frontend (from /frontend)
 npm run dev
 
 # Apply schema changes
@@ -109,6 +122,15 @@ cd backend && npx tsx src/backfill.ts
 
 # Check lap sync progress
 # Run in SQLite: SELECT COUNT(*) FROM activities WHERE session_type = 'interval' AND laps_synced = 0;
+
+# Trigger bulk lap sync (Postman or curl)
+# POST http://localhost:3001/api/sync/laps
+# Header: Cookie: strava_user_id=28501411
+
+# Test AI query (Postman)
+# POST http://localhost:3001/api/ai/query
+# Header: Cookie: strava_user_id=28501411
+# Body: { "question": "Show me all my Tuesday interval sessions" }
 ```
 
 ## Environment Variables (`backend/.env`)
@@ -117,12 +139,27 @@ STRAVA_CLIENT_ID=...
 STRAVA_CLIENT_SECRET=...
 FRONTEND_URL=http://localhost:5173
 PORT=3001
-ANTHROPIC_API_KEY=sk-ant-...
+OPENAI_API_KEY=sk-proj-...
 ```
 
 ## Auth Flow
 - Login: visit `http://localhost:3001/auth/strava` in browser
 - Cookie `strava_user_id` is set automatically after OAuth
 - All API routes require this cookie (`requireAuth` middleware)
-- For Postman: add Header `Cookie: strava_user_id=YOUR_STRAVA_ID`
+- For Postman: add Header `Cookie: strava_user_id=28501411`
 - Strava athlete ID: `28501411`
+
+## API Routes
+```
+POST /api/sync              — sync latest activities from Strava
+GET  /api/sync/status       — last sync time + activity count
+POST /api/sync/laps         — bulk sync laps for interval sessions
+
+GET  /api/activities        — list activities (filterable)
+GET  /api/activities/:id    — single activity
+GET  /api/activities/:id/laps — laps for activity
+
+POST /api/ai/query          — natural language training query
+
+GET  /api/metrics/summary   — aggregated metrics by period
+```

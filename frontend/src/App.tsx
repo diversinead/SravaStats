@@ -6,6 +6,7 @@ import Rules from "./pages/Rules";
 import Metrics from "./pages/Metrics";
 import ActivityDetail from "./pages/ActivityDetail";
 import "./App.css";
+import Coach from "./pages/Coach";
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
           <Route path="/activities/:id" element={<ActivityDetail />} />
           <Route path="/rules" element={<Rules />} />
           <Route path="/metrics" element={<Metrics />} />
+          <Route path="/coach" element={<Coach />} />
         </Route>
       </Routes>
     </BrowserRouter>

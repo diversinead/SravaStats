@@ -25,6 +25,52 @@ export const syncActivities = () => request<{ synced: number }>("/api/sync", { m
 export const getSyncStatus = () =>
   request<{ lastSync: string | null; activityCount: number }>("/api/sync/status");
 
+export interface AILap {
+  activityId: number;
+  lapIndex: number;
+  name: string;
+  customName: string | null;
+  distance: number | null;
+  movingTime: number | null;
+  averageSpeed: number | null;
+  averageHeartrate: number | null;
+  maxHeartrate: number | null;
+  averageCadence: number | null;
+  lapType: string | null;
+}
+
+export interface AIActivity {
+  id: number;
+  name: string;
+  sportType: string | null;
+  sessionType: string | null;
+  trainingCategory: string | null;
+  dayOfWeek: string | null;
+  startDateLocal: string | null;
+  distance: number | null;
+  movingTime: number | null;
+  averageSpeed: number | null;
+  averageHeartrate: number | null;
+  maxHeartrate: number | null;
+  averageCadence: number | null;
+  totalElevationGain: number | null;
+  sufferScore: number | null;
+  laps: AILap[];
+}
+
+export interface AIQueryResponse {
+  answer: string;
+  activitiesAnalysed: number;
+  filters: Record<string, unknown>;
+  activities: AIActivity[];
+}
+
+export const queryAI = (question: string) =>
+  request<AIQueryResponse>("/api/ai/query", {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+
 // Activities
 export interface Activity {
   id: number;

@@ -1,13 +1,50 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, schema } from "../db/index.js";
-import { eq, desc } from "drizzle-orm";
-import Anthropic from "@anthropic-ai/sdk";
+import { eq, desc, and, inArray } from "drizzle-orm";
+import OpenAI from "openai";
 
 const router = Router();
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+interface QueryFilters {
+  dayOfWeek?: string;
+  sessionTypes?: string[];
+  limit?: number;
+}
+
+async function extractFilters(openai: OpenAI, question: string): Promise<QueryFilters> {
+  const response = await openai.chat.completions.create({
+    model: "gpt-4o-mini", // cheap model for filter extraction
+    max_tokens: 200,
+    messages: [
+      {
+        role: "system",
+        content: `Extract query filters from a training question. Respond ONLY with valid JSON, no markdown.
+
+Valid sessionTypes: easy, long, interval, threshold, warmup, crosstraining, race
+Valid dayOfWeek: Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday
+
+Example output:
+{"dayOfWeek": "Tuesday", "sessionTypes": ["interval", "threshold"], "limit": 50}
+
+If no specific day mentioned, omit dayOfWeek.
+If no specific session type mentioned, omit sessionTypes.
+Always include limit (max 50).`,
+      },
+      { role: "user", content: question },
+    ],
+  });
+
+  try {
+    const text = response.choices[0]?.message?.content ?? "{}";
+    return JSON.parse(text) as QueryFilters;
+  } catch {
+    return { limit: 50 };
+  }
+}
 
 router.post("/query", requireAuth, async (req, res) => {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const userId = (req as any).userId as number;
   const { question } = req.body as { question: string };
 
@@ -17,7 +54,20 @@ router.post("/query", requireAuth, async (req, res) => {
   }
 
   try {
-    // Pull activities (most recent 500)
+    // Stage 1: extract filters from the question using cheap model
+    const filters = await extractFilters(openai, question);
+    console.log("Extracted filters:", filters);
+
+    // Stage 2: build filtered DB query
+    const conditions: any[] = [eq(schema.activities.userId, userId)];
+
+    if (filters.dayOfWeek) {
+      conditions.push(eq(schema.activities.dayOfWeek, filters.dayOfWeek));
+    }
+    if (filters.sessionTypes?.length) {
+      conditions.push(inArray(schema.activities.sessionType, filters.sessionTypes));
+    }
+
     const activities = db
       .select({
         id: schema.activities.id,
@@ -37,12 +87,12 @@ router.post("/query", requireAuth, async (req, res) => {
         sufferScore: schema.activities.sufferScore,
       })
       .from(schema.activities)
-      .where(eq(schema.activities.userId, userId))
+      .where(and(...conditions))
       .orderBy(desc(schema.activities.startDateLocal))
-      .limit(500)
+      .limit(filters.limit ?? 50)
       .all();
 
-    // Pull all laps for those activities
+    // Pull laps only for the filtered activities
     const activityIds = activities.map((a) => a.id);
     const laps = activityIds.length
       ? db
@@ -57,13 +107,14 @@ router.post("/query", requireAuth, async (req, res) => {
             averageHeartrate: schema.laps.averageHeartrate,
             maxHeartrate: schema.laps.maxHeartrate,
             averageCadence: schema.laps.averageCadence,
+            lapType: schema.laps.lapType,
           })
           .from(schema.laps)
+          .where(inArray(schema.laps.activityId, activityIds))
           .all()
-          .filter((l) => activityIds.includes(l.activityId))
       : [];
 
-    // Group laps by activityId for easier reference
+    // Group laps by activityId
     const lapsByActivity = laps.reduce(
       (acc: Record<number, typeof laps>, lap) => {
         if (!acc[lap.activityId]) acc[lap.activityId] = [];
@@ -79,6 +130,9 @@ router.post("/query", requireAuth, async (req, res) => {
       laps: lapsByActivity[a.id] ?? [],
     }));
 
+    console.log(`Sending ${enrichedActivities.length} activities to GPT-4o`);
+
+    // Stage 3: answer the question with filtered data
     const systemPrompt = `You are an expert running coach AI analysing an athlete's training data.
 
 Key data notes:
@@ -86,7 +140,7 @@ Key data notes:
 - Distance is in metres. Convert to km by dividing by 1000.
 - movingTime is in seconds. Convert to minutes/hours for display.
 - dayOfWeek is the local day the session was performed.
-- sessionType values: easy, long, interval, threshold, warmup, crosstraining, race, default
+- sessionType values: easy, long, interval, threshold, warmup, crosstraining, race
 - trainingCategory is the athlete's own label (e.g. "Track Workout", "Easy Run", "Threshold")
 - laps array contains per-rep data for interval/threshold sessions
 
@@ -97,11 +151,11 @@ When answering:
 - If comparing sessions, highlight trends (getting faster, slower, higher HR etc)
 - Format responses clearly with sections if there are multiple parts`;
 
-    const response = await anthropic.messages.create({
-      model: "claude-opus-4-5",
+    const response = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
       max_tokens: 2000,
-      system: systemPrompt,
       messages: [
+        { role: "system", content: systemPrompt },
         {
           role: "user",
           content: `Training data (${enrichedActivities.length} activities):\n${JSON.stringify(enrichedActivities)}\n\nQuestion: ${question}`,
@@ -109,10 +163,13 @@ When answering:
       ],
     });
 
-    const answer =
-      response.content[0].type === "text" ? response.content[0].text : "";
-
-    res.json({ answer });
+    const answer = response.choices[0]?.message?.content ?? "";
+    res.json({
+      answer,
+      activitiesAnalysed: enrichedActivities.length,
+      filters,
+      activities: enrichedActivities,
+    });
   } catch (err: any) {
     console.error("AI query error:", err);
     res.status(500).json({ error: err.message });

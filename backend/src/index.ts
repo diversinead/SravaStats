@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
 import path from "path";
-import aiRoutes from "./routes/ai.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, "..", ".env") });
@@ -16,6 +15,7 @@ import syncRoutes from "./routes/sync.js";
 import activityRoutes from "./routes/activities.js";
 import ruleRoutes from "./routes/rules.js";
 import metricRoutes from "./routes/metrics.js";
+import aiRoutes from "./routes/ai.js";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
