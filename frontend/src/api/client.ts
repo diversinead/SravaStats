@@ -38,6 +38,16 @@ export const syncLapsForActivities = (activityIds: number[]) =>
     body: JSON.stringify({ activityIds }),
   });
 
+// Per-activity rep structure. Matches RepStructure in Coach.utils.ts — we
+// redeclare here rather than import to keep the client free of page-module
+// imports (avoids circular risk).
+export interface RepStructure {
+  mode: "time" | "distance";
+  reps: number;
+  repSize: number; // seconds (time mode) or metres (distance mode)
+  recSec: number;
+}
+
 export interface AILap {
   activityId: number;
   lapIndex: number;
@@ -58,6 +68,7 @@ export interface AIActivity {
   sportType: string | null;
   sessionType: string | null;
   trainingCategory: string | null;
+  repStructure: RepStructure | null;
   dayOfWeek: string | null;
   startDateLocal: string | null;
   distance: number | null;
@@ -143,6 +154,7 @@ export interface Activity {
   totalElevationGain: number | null;
   sufferScore: number | null;
   trainingCategory: string | null;
+  repStructure: RepStructure | null;
   // Only the paginated list endpoint (/api/activities) populates laps; the
   // single-activity endpoint and the /metrics/compare endpoint omit them.
   laps?: AILap[];
@@ -184,6 +196,7 @@ export function activityToAI(a: Activity): AIActivity {
     sportType: a.sportType,
     sessionType: a.sessionType,
     trainingCategory: a.trainingCategory,
+    repStructure: a.repStructure,
     dayOfWeek: a.dayOfWeek,
     startDateLocal: a.startDateLocal,
     distance: a.distance,
@@ -206,6 +219,15 @@ export const bulkUpdateCategory = (activityIds: number[], trainingCategory: stri
     body: JSON.stringify({ activityIds, trainingCategory }),
   });
 
+export const bulkUpdateStructure = (
+  activityIds: number[],
+  repStructure: RepStructure | null
+) =>
+  request<{ updated: number }>("/api/activities/bulk-structure", {
+    method: "POST",
+    body: JSON.stringify({ activityIds, repStructure }),
+  });
+
 export const bulkUpdateCategoryByCriteria = (
   trainingCategory: string,
   filters: {
@@ -221,7 +243,14 @@ export const bulkUpdateCategoryByCriteria = (
     body: JSON.stringify({ trainingCategory, filters }),
   });
 
-export const updateActivity = (id: number, data: { trainingCategory?: string | null; name?: string }) =>
+export const updateActivity = (
+  id: number,
+  data: {
+    trainingCategory?: string | null;
+    name?: string;
+    repStructure?: RepStructure | null;
+  }
+) =>
   request<{ ok: boolean }>(`/api/activities/${id}`, {
     method: "PATCH",
     body: JSON.stringify(data),

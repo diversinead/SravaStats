@@ -58,13 +58,14 @@ function buildActivityConditions(
 }
 
 function fetchActivitiesByConditions(conditions: any[]) {
-  return db
+  const rows = db
     .select({
       id: schema.activities.id,
       name: schema.activities.name,
       sportType: schema.activities.sportType,
       sessionType: schema.activities.sessionType,
       trainingCategory: schema.activities.trainingCategory,
+      repStructure: schema.activities.repStructure,
       dayOfWeek: schema.activities.dayOfWeek,
       startDateLocal: schema.activities.startDateLocal,
       distance: schema.activities.distance,
@@ -81,6 +82,20 @@ function fetchActivitiesByConditions(conditions: any[]) {
     .orderBy(desc(schema.activities.startDateLocal))
     .limit(MAX_ACTIVITIES)
     .all();
+  // Parse the JSON column so the frontend gets an object or null.
+  return rows.map((r) => ({
+    ...r,
+    repStructure: parseRepStructure(r.repStructure),
+  }));
+}
+
+function parseRepStructure(raw: string | null): unknown {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
 }
 
 function fetchLapsByActivityIds(ids: number[]) {

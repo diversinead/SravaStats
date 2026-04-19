@@ -147,7 +147,11 @@ router.post("/laps/by-id", requireAuth, async (req, res) => {
   // doubles as ownership check — anything not owned by this user won't be
   // in the result.
   const owned = db
-    .select({ id: schema.activities.id, sessionType: schema.activities.sessionType })
+    .select({
+      id: schema.activities.id,
+      sessionType: schema.activities.sessionType,
+      trainingCategory: schema.activities.trainingCategory,
+    })
     .from(schema.activities)
     .where(
       and(
@@ -157,6 +161,23 @@ router.post("/laps/by-id", requireAuth, async (req, res) => {
     )
     .all();
   const ownedById = new Map(owned.map((a) => [a.id, a]));
+
+  // Intervals pull user-pressed laps (rep boundaries matter for 400m / mile
+  // repeats). Thresholds and everything else pull per-km splits_metric — the
+  // km-by-km view is consistent across sessions and the Compare modal's
+  // block detection derives rep boundaries from pace dips inside the splits.
+  //
+  // Use trainingCategory as the source of truth when set; fall back to
+  // sessionType only for untagged activities. Before this guard, a session
+  // tagged "Threshold" with a stale sessionType='interval' on the row (from
+  // the old classifier) was still routed to the user-laps branch.
+  const isStructuredReps = (meta: {
+    sessionType: string | null;
+    trainingCategory: string | null;
+  }): boolean =>
+    meta.trainingCategory
+      ? meta.trainingCategory === "Intervals"
+      : meta.sessionType === "interval";
 
   const lapsByActivity: Record<number, any[]> = {};
   let synced = 0;
@@ -171,9 +192,24 @@ router.post("/laps/by-id", requireAuth, async (req, res) => {
       continue;
     }
     try {
-      if (meta.sessionType === "interval") {
-        // Intervals: user-pressed laps mark the rep boundaries — pull from
-        // the /laps endpoint and persist as before.
+      if (isStructuredReps(meta)) {
+        // Intervals & thresholds: user-pressed laps mark the rep boundaries
+        // (classic 3×12min threshold, mile repeats, 400m reps, etc.). Pull
+        // from the /laps endpoint.
+        //
+        // Clear any stale per-km split rows from an earlier sync — the
+        // threshold branch used to default to splits_metric before the merge.
+        // We only delete lapType='split' rows so user-laps with custom names
+        // survive re-syncs.
+        db.delete(schema.laps)
+          .where(
+            and(
+              eq(schema.laps.activityId, id),
+              eq(schema.laps.lapType, "split")
+            )
+          )
+          .run();
+
         const stravaLaps = await fetchActivityLaps(userId, id);
         for (const sl of stravaLaps) {
           db.insert(schema.laps)

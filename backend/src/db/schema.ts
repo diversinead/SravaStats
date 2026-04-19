@@ -30,6 +30,7 @@ export const activities = sqliteTable("activities", {
   averageCadence: real("average_cadence"),
   sufferScore: integer("suffer_score"),
   trainingCategory: text("training_category"), // user-defined: e.g. "Easy Run", "Threshold", "Track Workout"
+  repStructure: text("rep_structure"), // JSON: {mode,reps,repSize,recSec} — null = auto-detect at compare time
   workoutType: integer("workout_type"), // Strava: 0=default, 1=race, 2=long run, 3=workout (runs); 10=default, 11=race, 12=workout (rides)
   timezone: text("timezone"), // e.g. "(GMT+00:00) Europe/London"
   startLatlng: text("start_latlng"), // JSON [lat, lng]]

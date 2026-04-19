@@ -5,10 +5,12 @@ import {
   updateActivityCategory,
   updateActivity,
   bulkUpdateCategory,
+  bulkUpdateStructure,
   getAIInsight,
   activityToAI,
   type Activity,
   type AIInsightResponse,
+  type RepStructure,
 } from "../api/client";
 import CompareModal from "./CompareModal";
 import "./Coach.css";
@@ -92,6 +94,303 @@ function formatDuration(seconds: number | null): string {
   const s = seconds % 60;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m ${s}s`;
+}
+
+// ---- Rep structure presets + helpers ----------------------------------
+// "null" preset = Auto (no structure stored). The rest cover the athlete's
+// usual session shapes; custom is handled by tweaking the form inputs.
+interface Preset {
+  label: string;
+  value: RepStructure | null;
+}
+const STRUCTURE_PRESETS: Preset[] = [
+  { label: "Auto", value: null },
+  { label: "3 × 6min / 1min", value: { mode: "time", reps: 3, repSize: 360, recSec: 60 } },
+  { label: "3 × 8min / 1min", value: { mode: "time", reps: 3, repSize: 480, recSec: 60 } },
+  { label: "3 × 10min / 1min", value: { mode: "time", reps: 3, repSize: 600, recSec: 60 } },
+  { label: "3 × 12min / 1min", value: { mode: "time", reps: 3, repSize: 720, recSec: 60 } },
+  { label: "3 × 15min / 1min", value: { mode: "time", reps: 3, repSize: 900, recSec: 60 } },
+  { label: "4 × 8min / 1min", value: { mode: "time", reps: 4, repSize: 480, recSec: 60 } },
+  { label: "5 × 1km / 1min", value: { mode: "distance", reps: 5, repSize: 1000, recSec: 60 } },
+];
+
+function formatRepSize(s: RepStructure): string {
+  if (s.mode === "time") {
+    const m = Math.floor(s.repSize / 60);
+    const sec = s.repSize % 60;
+    return sec === 0 ? `${m}min` : `${m}:${sec.toString().padStart(2, "0")}`;
+  }
+  if (s.repSize >= 1000) {
+    return s.repSize % 1000 === 0
+      ? `${s.repSize / 1000}km`
+      : `${(s.repSize / 1000).toFixed(1)}km`;
+  }
+  return `${s.repSize}m`;
+}
+
+function formatRecovery(sec: number): string {
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return s === 0 ? `${m}min` : `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatStructure(s: RepStructure | null | undefined): string {
+  if (!s) return "—";
+  return `${s.reps}×${formatRepSize(s)}/${formatRecovery(s.recSec)}`;
+}
+
+function RepStructureCell({
+  activity,
+  onUpdated,
+}: {
+  activity: Activity;
+  onUpdated: (id: number, structure: RepStructure | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [mode, setMode] = useState<"" | "time" | "distance">(
+    activity.repStructure?.mode ?? ""
+  );
+  const [reps, setReps] = useState<number>(activity.repStructure?.reps ?? 3);
+  // Display in the athlete's unit (min or km); convert to sec/m on save.
+  const [sizeInput, setSizeInput] = useState<number>(() => {
+    if (!activity.repStructure) return 8;
+    return activity.repStructure.mode === "time"
+      ? activity.repStructure.repSize / 60
+      : activity.repStructure.repSize / 1000;
+  });
+  const [recInput, setRecInput] = useState<number>(
+    activity.repStructure?.recSec ?? 60
+  );
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    const s = activity.repStructure;
+    setMode(s?.mode ?? "");
+    setReps(s?.reps ?? 3);
+    setSizeInput(s ? (s.mode === "time" ? s.repSize / 60 : s.repSize / 1000) : 8);
+    setRecInput(s?.recSec ?? 60);
+    setEditing(true);
+  };
+
+  const applyPreset = (idx: string) => {
+    if (idx === "") return;
+    const p = STRUCTURE_PRESETS[Number(idx)];
+    if (!p.value) {
+      setMode("");
+      return;
+    }
+    setMode(p.value.mode);
+    setReps(p.value.reps);
+    setSizeInput(p.value.mode === "time" ? p.value.repSize / 60 : p.value.repSize / 1000);
+    setRecInput(p.value.recSec);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    const structure: RepStructure | null =
+      mode === ""
+        ? null
+        : {
+            mode,
+            reps,
+            repSize:
+              mode === "time"
+                ? Math.round(sizeInput * 60)
+                : Math.round(sizeInput * 1000),
+            recSec: Math.round(recInput),
+          };
+    try {
+      await updateActivity(activity.id, { repStructure: structure });
+      onUpdated(activity.id, structure);
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!editing) {
+    return (
+      <span className="structure-display" onClick={startEdit} title="Click to edit">
+        {formatStructure(activity.repStructure)}
+      </span>
+    );
+  }
+
+  return (
+    <span className="structure-edit">
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          applyPreset(e.target.value);
+          e.target.value = "";
+        }}
+        title="Apply preset"
+      >
+        <option value="">Preset…</option>
+        {STRUCTURE_PRESETS.map((p, i) => (
+          <option key={i} value={String(i)}>{p.label}</option>
+        ))}
+      </select>
+      <select value={mode} onChange={(e) => setMode(e.target.value as "" | "time" | "distance")}>
+        <option value="">Auto</option>
+        <option value="time">Time</option>
+        <option value="distance">Distance</option>
+      </select>
+      {mode !== "" && (
+        <>
+          <input
+            type="number"
+            min={1}
+            value={reps}
+            onChange={(e) => setReps(Number(e.target.value))}
+            style={{ width: "3rem" }}
+          />
+          ×
+          <input
+            type="number"
+            min={0}
+            step={mode === "time" ? 0.5 : 0.1}
+            value={sizeInput}
+            onChange={(e) => setSizeInput(Number(e.target.value))}
+            style={{ width: "4rem" }}
+          />
+          <span>{mode === "time" ? "min" : "km"}</span>
+          <span>/</span>
+          <input
+            type="number"
+            min={0}
+            step={15}
+            value={recInput}
+            onChange={(e) => setRecInput(Number(e.target.value))}
+            style={{ width: "4rem" }}
+          />
+          <span>s rec</span>
+        </>
+      )}
+      <button onClick={save} disabled={saving} className="btn btn-sm">Save</button>
+      <button onClick={() => setEditing(false)} disabled={saving} className="btn btn-sm">Cancel</button>
+    </span>
+  );
+}
+
+// Structure editor used in the bulk-action bar. Mirrors the single-row cell
+// editor's controls but has its own internal state and calls back with the
+// chosen structure when Apply is pressed.
+function BulkStructureControl({
+  onApply,
+  disabled,
+}: {
+  onApply: (structure: RepStructure | null) => Promise<void> | void;
+  disabled: boolean;
+}) {
+  const [mode, setMode] = useState<"" | "time" | "distance">("");
+  const [reps, setReps] = useState(3);
+  const [sizeInput, setSizeInput] = useState(8);
+  const [recInput, setRecInput] = useState(60);
+  const [applying, setApplying] = useState(false);
+
+  const applyPreset = (idx: string) => {
+    if (idx === "") return;
+    const p = STRUCTURE_PRESETS[Number(idx)];
+    if (!p.value) {
+      setMode("");
+      return;
+    }
+    setMode(p.value.mode);
+    setReps(p.value.reps);
+    setSizeInput(
+      p.value.mode === "time" ? p.value.repSize / 60 : p.value.repSize / 1000
+    );
+    setRecInput(p.value.recSec);
+  };
+
+  const handleApply = async () => {
+    setApplying(true);
+    const structure: RepStructure | null =
+      mode === ""
+        ? null
+        : {
+            mode,
+            reps,
+            repSize:
+              mode === "time"
+                ? Math.round(sizeInput * 60)
+                : Math.round(sizeInput * 1000),
+            recSec: Math.round(recInput),
+          };
+    try {
+      await onApply(structure);
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  return (
+    <>
+      <span className="bulk-sep">|</span>
+      <span>Structure:</span>
+      <select
+        defaultValue=""
+        onChange={(e) => {
+          applyPreset(e.target.value);
+          e.target.value = "";
+        }}
+        title="Apply preset"
+      >
+        <option value="">Preset…</option>
+        {STRUCTURE_PRESETS.map((p, i) => (
+          <option key={i} value={String(i)}>{p.label}</option>
+        ))}
+      </select>
+      <select
+        value={mode}
+        onChange={(e) => setMode(e.target.value as "" | "time" | "distance")}
+      >
+        <option value="">Clear</option>
+        <option value="time">Time</option>
+        <option value="distance">Distance</option>
+      </select>
+      {mode !== "" && (
+        <>
+          <input
+            type="number"
+            min={1}
+            value={reps}
+            onChange={(e) => setReps(Number(e.target.value))}
+            style={{ width: "3rem" }}
+          />
+          ×
+          <input
+            type="number"
+            min={0}
+            step={mode === "time" ? 0.5 : 0.1}
+            value={sizeInput}
+            onChange={(e) => setSizeInput(Number(e.target.value))}
+            style={{ width: "4rem" }}
+          />
+          <span>{mode === "time" ? "min" : "km"}</span>
+          <span>/</span>
+          <input
+            type="number"
+            min={0}
+            step={15}
+            value={recInput}
+            onChange={(e) => setRecInput(Number(e.target.value))}
+            style={{ width: "4rem" }}
+          />
+          <span>s rec</span>
+        </>
+      )}
+      <button
+        onClick={handleApply}
+        disabled={disabled || applying}
+        className="btn btn-primary btn-sm"
+      >
+        Apply structure
+      </button>
+    </>
+  );
 }
 
 function CategoryCell({
@@ -306,6 +605,14 @@ export default function Activities() {
       prev.map((a) => (a.id === id ? { ...a, trainingCategory: category } : a))
     );
   };
+  const handleStructureUpdated = (
+    id: number,
+    structure: RepStructure | null
+  ) => {
+    setActivities((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, repStructure: structure } : a))
+    );
+  };
   const handleRenamed = (id: number, name: string) => {
     setActivities((prev) =>
       prev.map((a) => (a.id === id ? { ...a, name } : a))
@@ -332,6 +639,18 @@ export default function Activities() {
     );
     setSelected(new Set());
     setBulkCategory("");
+  };
+
+  const handleBulkStructure = async (structure: RepStructure | null) => {
+    if (selected.size === 0) return;
+    const ids = [...selected];
+    await bulkUpdateStructure(ids, structure);
+    setActivities((prev) =>
+      prev.map((a) =>
+        selected.has(a.id) ? { ...a, repStructure: structure } : a
+      )
+    );
+    setSelected(new Set());
   };
 
   const toggleFilterCategory = (cat: string) => {
@@ -559,8 +878,9 @@ export default function Activities() {
       {selected.size > 0 && (
         <div className="bulk-bar card">
           <span>{selected.size} selected</span>
+          <span>Category:</span>
           <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
-            <option value="">Assign category...</option>
+            <option value="">Assign…</option>
             <option value="__clear__">Clear category</option>
             {TRAINING_CATEGORIES.map((cat) => (
               <option key={cat} value={cat}>{cat}</option>
@@ -573,6 +893,11 @@ export default function Activities() {
           >
             Apply
           </button>
+          <BulkStructureControl
+            onApply={handleBulkStructure}
+            disabled={selected.size === 0}
+          />
+          <span className="bulk-sep">|</span>
           <button
             onClick={() => setShowCompare(true)}
             className="btn btn-sm"
@@ -600,6 +925,7 @@ export default function Activities() {
             <SortHeader label="Date" field="date" current={sortBy} order={sortOrder} onSort={handleSort} />
             <SortHeader label="Name" field="name" current={sortBy} order={sortOrder} onSort={handleSort} />
             <SortHeader label="Category" field="type" current={sortBy} order={sortOrder} onSort={handleSort} />
+            <th>Structure</th>
             <SortHeader label="Distance" field="distance" current={sortBy} order={sortOrder} onSort={handleSort} />
             <SortHeader label="Pace" field="pace" current={sortBy} order={sortOrder} onSort={handleSort} />
             <SortHeader label="Duration" field="duration" current={sortBy} order={sortOrder} onSort={handleSort} />
@@ -619,6 +945,7 @@ export default function Activities() {
               <td>{new Date(a.startDate).toLocaleDateString()}</td>
               <td><NameCell activity={a} onRenamed={handleRenamed} /></td>
               <td><CategoryCell activity={a} onUpdated={handleCategoryUpdated} /></td>
+              <td><RepStructureCell activity={a} onUpdated={handleStructureUpdated} /></td>
               <td>{formatDistance(a.distance)}</td>
               <td>{formatPace(a.averageSpeed)}</td>
               <td>{formatDuration(a.movingTime)}</td>

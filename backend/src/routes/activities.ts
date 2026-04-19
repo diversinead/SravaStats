@@ -77,11 +77,23 @@ router.get("/", requireAuth, (req, res) => {
   const activities = activityRows.map((a) => ({
     ...a,
     rawJson: undefined,
+    repStructure: parseRepStructure(a.repStructure),
     laps: lapsByActivity[a.id] ?? [],
   }));
 
   res.json({ activities, page, total });
 });
+
+// Defensive JSON parse — if the column ever holds malformed data we return
+// null rather than 500ing the whole list endpoint.
+function parseRepStructure(raw: string | null): unknown {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
 
 // Accept ?category=A&category=B (or a single string). "__uncategorised__"
 // entries expand to IS NULL and can be mixed with real categories.
@@ -117,8 +129,11 @@ router.get("/:id", requireAuth, (req, res) => {
     return;
   }
 
-  const { rawJson, ...rest } = activity;
-  res.json(rest);
+  const { rawJson, repStructure, ...rest } = activity;
+  res.json({
+    ...rest,
+    repStructure: parseRepStructure(repStructure),
+  });
 });
 
 // Bulk update training category
@@ -136,6 +151,37 @@ router.post("/bulk-category", requireAuth, (req, res) => {
 
   db.update(schema.activities)
     .set({ trainingCategory: trainingCategory || null })
+    .where(
+      and(
+        eq(schema.activities.userId, userId),
+        inArray(schema.activities.id, activityIds)
+      )
+    )
+    .run();
+
+  res.json({ updated: activityIds.length });
+});
+
+// Bulk update rep structure for a specific list of activities
+router.post("/bulk-structure", requireAuth, (req, res) => {
+  const userId = (req as any).userId as number;
+  const { activityIds, repStructure } = req.body as {
+    activityIds: number[];
+    repStructure: {
+      mode: "time" | "distance";
+      reps: number;
+      repSize: number;
+      recSec: number;
+    } | null;
+  };
+
+  if (!activityIds?.length) {
+    res.status(400).json({ error: "activityIds required" });
+    return;
+  }
+
+  db.update(schema.activities)
+    .set({ repStructure: repStructure ? JSON.stringify(repStructure) : null })
     .where(
       and(
         eq(schema.activities.userId, userId),
@@ -208,11 +254,21 @@ router.post("/bulk-category-by-criteria", requireAuth, (req, res) => {
   res.json({ updated: matching.length });
 });
 
-// Update activity fields (name, training category)
+// Update activity fields (name, training category, rep structure)
 router.patch("/:id", requireAuth, (req, res) => {
   const userId = (req as any).userId as number;
   const activityId = Number(req.params.id);
-  const { trainingCategory, name } = req.body as { trainingCategory?: string | null; name?: string };
+  const { trainingCategory, name, repStructure } = req.body as {
+    trainingCategory?: string | null;
+    name?: string;
+    // RepStructure object or null to clear
+    repStructure?: {
+      mode: "time" | "distance";
+      reps: number;
+      repSize: number;
+      recSec: number;
+    } | null;
+  };
 
   const activity = db
     .select({ id: schema.activities.id })
@@ -228,6 +284,9 @@ router.patch("/:id", requireAuth, (req, res) => {
   const updates: Record<string, any> = {};
   if (trainingCategory !== undefined) updates.trainingCategory = trainingCategory || null;
   if (name !== undefined && name.trim()) updates.name = name.trim();
+  if (repStructure !== undefined) {
+    updates.repStructure = repStructure ? JSON.stringify(repStructure) : null;
+  }
 
   if (Object.keys(updates).length > 0) {
     db.update(schema.activities)
