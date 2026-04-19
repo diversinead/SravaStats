@@ -225,15 +225,17 @@ export function upsertUser(tokenData: StravaTokenResponse) {
 }
 
 function classifySession(a: StravaActivity & { trainingCategory?: string }): string {
+  // Maps the 11-value trainingCategory enum to a small set of sessionType
+  // buckets used for the coloured pill + table grouping.
   const cat = a.trainingCategory?.toLowerCase() ?? '';
-  if (cat.includes('easy') || cat.includes('recovery') || cat.includes('heat')) return 'easy';
+  if (cat.includes('easy') || cat.includes('recovery') || cat.includes('heat') || cat.includes('treadmill')) return 'easy';
   if (cat.includes('long') || cat.includes('marathon')) return 'long';
-  if (cat.includes('track') || cat.includes('threshold') || cat.includes('road workout') || cat.includes('gravel')) return 'interval';
-  if (cat.includes('wu') || cat.includes('cd') || cat.includes('strides')) return 'warmup';
+  if (cat.includes('threshold')) return 'threshold';
+  if (cat.includes('interval')) return 'interval';
+  if (cat === 'wu/cd' || cat.includes('wu') || cat.includes('cd')) return 'warmup';
   if (cat.includes('cross')) return 'crosstraining';
   if (cat.includes('race')) return 'race';
-  if (cat.includes('tempo')) return 'tempo';
-  // fallback to name-based
+  // fallback to Strava's workout_type when the athlete hasn't categorised the session yet
   if (a.workout_type === 1) return 'race';
   if (a.workout_type === 2) return 'long';
   if (a.workout_type === 3) return 'interval';

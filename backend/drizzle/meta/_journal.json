@@ -43,6 +43,13 @@
       "when": 1774161000000,
       "tag": "0005_remove_tags_add_category_rules",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1776000000000,
+      "tag": "0006_merge_categories",
+      "breakpoints": true
     }
   ]
 }

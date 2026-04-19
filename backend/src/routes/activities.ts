@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, schema } from "../db/index.js";
-import { eq, and, gte, lte, desc, asc, like, isNull, inArray, sql } from "drizzle-orm";
+import { eq, and, or, gte, lte, desc, asc, like, isNull, inArray, sql } from "drizzle-orm";
 import { fetchActivityLaps } from "../services/strava.js";
 
 const router = Router();
@@ -31,13 +31,8 @@ router.get("/", requireAuth, (req, res) => {
   if (req.query.sport_type) {
     conditions.push(eq(schema.activities.sportType, req.query.sport_type as string));
   }
-  if (req.query.category) {
-    if (req.query.category === "__uncategorised__") {
-      conditions.push(isNull(schema.activities.trainingCategory));
-    } else {
-      conditions.push(eq(schema.activities.trainingCategory, req.query.category as string));
-    }
-  }
+  const categoryCond = buildCategoryCondition(req.query.category);
+  if (categoryCond) conditions.push(categoryCond);
   if (req.query.from) {
     conditions.push(gte(schema.activities.startDate, req.query.from as string));
   }
@@ -63,13 +58,48 @@ router.get("/", requireAuth, (req, res) => {
     .offset(offset)
     .all();
 
+  // Pull laps for just the current page so the merged Activities table can
+  // render the rep-summary column without a second round-trip per row.
+  const pageIds = activityRows.map((a) => a.id);
+  const lapRows = pageIds.length
+    ? db
+        .select()
+        .from(schema.laps)
+        .where(inArray(schema.laps.activityId, pageIds))
+        .orderBy(asc(schema.laps.lapIndex))
+        .all()
+    : [];
+  const lapsByActivity: Record<number, typeof lapRows> = {};
+  for (const lap of lapRows) {
+    (lapsByActivity[lap.activityId] ||= []).push(lap);
+  }
+
   const activities = activityRows.map((a) => ({
     ...a,
     rawJson: undefined,
+    laps: lapsByActivity[a.id] ?? [],
   }));
 
   res.json({ activities, page, total });
 });
+
+// Accept ?category=A&category=B (or a single string). "__uncategorised__"
+// entries expand to IS NULL and can be mixed with real categories.
+function buildCategoryCondition(raw: unknown) {
+  if (raw == null) return null;
+  const values = Array.isArray(raw)
+    ? (raw as string[])
+    : [raw as string];
+  if (values.length === 0) return null;
+  const named = values.filter((v) => v && v !== "__uncategorised__");
+  const uncat = values.includes("__uncategorised__");
+  const clauses = [] as any[];
+  if (named.length === 1) clauses.push(eq(schema.activities.trainingCategory, named[0]));
+  else if (named.length > 1) clauses.push(inArray(schema.activities.trainingCategory, named));
+  if (uncat) clauses.push(isNull(schema.activities.trainingCategory));
+  if (clauses.length === 0) return null;
+  return clauses.length === 1 ? clauses[0] : or(...clauses);
+}
 
 // Get single activity
 router.get("/:id", requireAuth, (req, res) => {

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, schema } from "../db/index.js";
-import { eq, desc, and, inArray, gte, lte } from "drizzle-orm";
+import { eq, desc, and, inArray, gte, lte, like, or, isNull } from "drizzle-orm";
 import OpenAI from "openai";
 
 const router = Router();
@@ -10,16 +10,38 @@ const router = Router();
 // budget. UI surfaces the count back to the user so they can narrow the range.
 const MAX_ACTIVITIES = 500;
 
+export interface ActivityFilterOpts {
+  categories?: string[];
+  from?: string;
+  to?: string;
+  search?: string;
+  sportType?: string;
+}
+
 function buildActivityConditions(
   userId: number,
-  opts: { categories?: string[]; from?: string; to?: string }
+  opts: ActivityFilterOpts
 ): any[] {
   const conditions: any[] = [eq(schema.activities.userId, userId)];
 
   if (opts.categories && opts.categories.length > 0) {
-    conditions.push(
-      inArray(schema.activities.trainingCategory, opts.categories)
-    );
+    const named = opts.categories.filter((c) => c && c !== "__uncategorised__");
+    const includeUncat = opts.categories.includes("__uncategorised__");
+    const clauses: any[] = [];
+    if (named.length > 0) {
+      clauses.push(inArray(schema.activities.trainingCategory, named));
+    }
+    if (includeUncat) {
+      clauses.push(isNull(schema.activities.trainingCategory));
+    }
+    if (clauses.length === 1) conditions.push(clauses[0]);
+    else if (clauses.length > 1) conditions.push(or(...clauses));
+  }
+  if (opts.sportType) {
+    conditions.push(eq(schema.activities.sportType, opts.sportType));
+  }
+  if (opts.search) {
+    conditions.push(like(schema.activities.name, `%${opts.search}%`));
   }
   // Date range applied against startDateLocal (athlete's local date). The
   // YYYY-MM-DD prefix lexicographically compares correctly against the
@@ -93,17 +115,16 @@ function fetchLapsByActivityIds(ids: number[]) {
 // this is the data source for the table on the AI Coach page.
 router.post("/activities", requireAuth, async (req, res) => {
   const userId = (req as any).userId as number;
-  const { categories, from, to } = req.body as {
-    categories?: string[];
-    from?: string;
-    to?: string;
-  };
+  const { categories, from, to, search, sportType } = req.body as
+    ActivityFilterOpts;
 
   try {
     const conditions = buildActivityConditions(userId, {
       categories,
       from,
       to,
+      search,
+      sportType,
     });
 
     const allMatching = db
@@ -143,30 +164,45 @@ router.post("/activities", requireAuth, async (req, res) => {
 router.post("/insights", requireAuth, async (req, res) => {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const userId = (req as any).userId as number;
-  const { question, activityIds } = req.body as {
+  const { question, activityIds, filters } = req.body as {
     question: string;
-    activityIds: number[];
+    activityIds?: number[];
+    filters?: ActivityFilterOpts;
   };
 
   if (!question?.trim()) {
     res.status(400).json({ error: "question is required" });
     return;
   }
-  if (!Array.isArray(activityIds) || activityIds.length === 0) {
-    res.status(400).json({ error: "activityIds must be a non-empty array" });
+
+  // Two ways to scope: explicit activityIds (when the user has selected
+  // specific rows) or filters (the merged Activities-page AI panel asks on
+  // the current filter state). When both are absent, there's nothing to
+  // analyse.
+  const hasIds = Array.isArray(activityIds) && activityIds.length > 0;
+  const hasFilters = !!filters;
+  if (!hasIds && !hasFilters) {
+    res.status(400).json({
+      error: "activityIds or filters must be provided",
+    });
     return;
   }
 
-  // Cap the set sent to OpenAI; surface to the caller so the UI can warn.
-  const cappedIds = activityIds.slice(0, MAX_ACTIVITIES);
-  const truncated = activityIds.length > MAX_ACTIVITIES;
+  const conditions = hasIds
+    ? [
+        eq(schema.activities.userId, userId),
+        inArray(schema.activities.id, activityIds!.slice(0, MAX_ACTIVITIES)),
+      ]
+    : buildActivityConditions(userId, filters!);
 
-  // Re-fetch from the DB. Important for security (verify userId owns these
-  // activities) and to get fresh laps without trusting client-side data.
-  const conditions = [
-    eq(schema.activities.userId, userId),
-    inArray(schema.activities.id, cappedIds),
-  ];
+  // Count the full match set so we can report truncation back to the UI.
+  const allMatching = db
+    .select({ id: schema.activities.id })
+    .from(schema.activities)
+    .where(and(...conditions))
+    .all();
+  const truncated = allMatching.length > MAX_ACTIVITIES;
+
   const activities = fetchActivitiesByConditions(conditions);
   const lapsByActivity = fetchLapsByActivityIds(activities.map((a) => a.id));
   const enriched = activities.map((a) => ({
@@ -189,7 +225,7 @@ Key data notes:
 - movingTime is in seconds. Convert to minutes/hours for display.
 - dayOfWeek is the local day the session was performed.
 - sessionType values: easy, long, interval, threshold, warmup, crosstraining, race
-- trainingCategory is the athlete's own label (e.g. "Track Workout", "Easy Run", "Threshold")
+- trainingCategory is the athlete's own label. Values: "Easy Run", "Recovery Run", "Long Run", "Threshold", "Marathon Session", "Intervals", "Race", "WU/CD", "Cross Training", "Heat Run", "Treadmill" (or null if uncategorised)
 - laps array contains per-rep / per-km data. lapType="split" means Strava's
   per-km auto-split (continuous threshold/easy/long); lapType=null means
   user-pressed lap (interval rep boundaries).
@@ -219,7 +255,7 @@ FORMAT for visual readability (rendered as styled markdown):
 - Use realistic competitive-runner numbers when relevant — the athlete runs
   threshold around 3:30–3:40/km, so pick examples accordingly.`;
 
-  const scopeNote = `\n\nScope: ${enriched.length} activities pre-filtered by the user${truncated ? ` (capped from ${activityIds.length}).` : "."}`;
+  const scopeNote = `\n\nScope: ${enriched.length} activities pre-filtered by the user${truncated ? ` (capped from ${allMatching.length}).` : "."}`;
 
   try {
     const response = await openai.chat.completions.create({

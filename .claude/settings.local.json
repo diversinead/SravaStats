@@ -25,7 +25,8 @@
       "Bash(npx --no-install tsc --noEmit src/routes/ai.ts)",
       "Bash(npx --no-install tsc --noEmit --skipLibCheck src/routes/ai.ts)",
       "Bash(npx --no-install tsc --noEmit)",
-      "Bash(npx --no-install tsc --noEmit --project tsconfig.app.json)"
+      "Bash(npx --no-install tsc --noEmit --project tsconfig.app.json)",
+      "Bash(npx eslint *)"
     ]
   }
 }

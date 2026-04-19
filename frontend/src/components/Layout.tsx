@@ -42,7 +42,6 @@ export default function Layout() {
           <Link to="/">Dashboard</Link>
           <Link to="/activities">Activities</Link>
           <Link to="/rules">Rules</Link>
-          <Link to="/coach">AI Coach</Link>
         </div>
         <div className="nav-user">
           <span>{user.username}</span>

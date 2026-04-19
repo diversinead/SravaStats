@@ -82,19 +82,33 @@ export interface ActivitiesQueryResponse {
   categories: string[] | null;
 }
 
-export const fetchFilteredActivities = (opts: {
+export interface ActivityFilterOpts {
   categories?: string[];
   from?: string;
   to?: string;
-}) =>
+  search?: string;
+  sportType?: string;
+}
+
+export const fetchFilteredActivities = (opts: ActivityFilterOpts) =>
   request<ActivitiesQueryResponse>("/api/ai/activities", {
     method: "POST",
     body: JSON.stringify({
       categories: opts.categories,
       from: opts.from || undefined,
       to: opts.to || undefined,
+      search: opts.search || undefined,
+      sportType: opts.sportType || undefined,
     }),
   });
+
+// AI insight scope: either explicit activity IDs (user-selected rows) or the
+// filter state itself (server derives IDs). Backend rejects if both missing.
+export interface AIInsightRequest {
+  question: string;
+  activityIds?: number[];
+  filters?: ActivityFilterOpts;
+}
 
 // AI insight on a specific filtered + selected set of activities
 export interface AIInsightResponse {
@@ -104,10 +118,10 @@ export interface AIInsightResponse {
   maxActivities: number;
 }
 
-export const getAIInsight = (question: string, activityIds: number[]) =>
+export const getAIInsight = (req: AIInsightRequest) =>
   request<AIInsightResponse>("/api/ai/insights", {
     method: "POST",
-    body: JSON.stringify({ question, activityIds }),
+    body: JSON.stringify(req),
   });
 
 // Activities
@@ -115,7 +129,10 @@ export interface Activity {
   id: number;
   name: string;
   sportType: string | null;
+  sessionType: string | null;
   startDate: string;
+  startDateLocal: string | null;
+  dayOfWeek: string | null;
   distance: number | null;
   movingTime: number | null;
   elapsedTime: number | null;
@@ -126,6 +143,9 @@ export interface Activity {
   totalElevationGain: number | null;
   sufferScore: number | null;
   trainingCategory: string | null;
+  // Only the paginated list endpoint (/api/activities) populates laps; the
+  // single-activity endpoint and the /metrics/compare endpoint omit them.
+  laps?: AILap[];
 }
 
 export interface ActivitiesResponse {
@@ -134,10 +154,49 @@ export interface ActivitiesResponse {
   total: number;
 }
 
-export const getActivities = (params?: Record<string, string>) => {
-  const qs = params ? "?" + new URLSearchParams(params).toString() : "";
+// Params accept arrays (e.g. category) which serialise as repeated query keys.
+export const getActivities = (
+  params?: Record<string, string | string[] | undefined>
+) => {
+  const qs = params ? "?" + encodeParams(params) : "";
   return request<ActivitiesResponse>(`/api/activities${qs}`);
 };
+
+function encodeParams(params: Record<string, string | string[] | undefined>): string {
+  const usp = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) usp.append(key, v);
+    } else {
+      usp.append(key, value);
+    }
+  }
+  return usp.toString();
+}
+
+// Convert a paginated Activity (with laps) into the AIActivity shape that
+// CompareModal expects.
+export function activityToAI(a: Activity): AIActivity {
+  return {
+    id: a.id,
+    name: a.name,
+    sportType: a.sportType,
+    sessionType: a.sessionType,
+    trainingCategory: a.trainingCategory,
+    dayOfWeek: a.dayOfWeek,
+    startDateLocal: a.startDateLocal,
+    distance: a.distance,
+    movingTime: a.movingTime,
+    averageSpeed: a.averageSpeed,
+    averageHeartrate: a.averageHeartrate,
+    maxHeartrate: a.maxHeartrate,
+    averageCadence: a.averageCadence,
+    totalElevationGain: a.totalElevationGain,
+    sufferScore: a.sufferScore,
+    laps: a.laps ?? [],
+  };
+}
 
 export const getActivity = (id: number) => request<Activity>(`/api/activities/${id}`);
 
