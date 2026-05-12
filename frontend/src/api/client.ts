@@ -303,6 +303,8 @@ export const deleteRule = (id: number) =>
   request(`/api/rules/${id}`, { method: "DELETE" });
 export const applyRules = () => request<{ applied: number }>("/api/rules/apply", { method: "POST" });
 export const applySingleRule = (id: number) => request<{ applied: number }>(`/api/rules/${id}/apply`, { method: "POST" });
+export const undoRulesApply = () => request<{ restored: number }>("/api/rules/undo", { method: "POST" });
+export const getRulesUndoAvailable = () => request<{ available: boolean }>("/api/rules/undo/available");
 
 // Metrics
 export interface MetricPeriod {

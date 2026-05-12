@@ -1,5 +1,16 @@
 node_modules/
 dist/
 *.db
+*.db-shm
+*.db-wal
 .env
 .idea/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+
+# Claude Code per-machine settings
+.claude/settings.local.json
+
+# Local screenshots / scratch
+test/

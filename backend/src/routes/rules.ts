@@ -2,14 +2,15 @@ import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { db, schema } from "../db/index.js";
 import { eq, and } from "drizzle-orm";
-import { applyRulesToActivities, applySingleRule, previewRule } from "../services/rules.js";
+import { applyRulesToActivities, applySingleRule, previewRule, undoLastApply, hasUndo } from "../services/rules.js";
 
 const router = Router();
 
 const VALID_TYPES = [
   "day_of_week", "name_contains", "sport_type",
   "date_range", "duration_range", "distance_range",
-  "workout_type", "location",
+  "pace_range", "workout_type", "location",
+  "compound",
 ];
 
 // List rules
@@ -115,6 +116,24 @@ router.post("/apply", requireAuth, (req, res) => {
   const userId = (req as any).userId as number;
   const applied = applyRulesToActivities(userId);
   res.json({ applied });
+});
+
+// Undo the most recent apply (full or single-rule) by restoring categories
+// from the in-memory snapshot. One level of undo; cleared on success.
+router.post("/undo", requireAuth, (req, res) => {
+  const userId = (req as any).userId as number;
+  const restored = undoLastApply(userId);
+  if (restored === null) {
+    res.status(404).json({ error: "Nothing to undo" });
+    return;
+  }
+  res.json({ restored });
+});
+
+// Lets the UI grey out the Undo button on page load.
+router.get("/undo/available", requireAuth, (req, res) => {
+  const userId = (req as any).userId as number;
+  res.json({ available: hasUndo(userId) });
 });
 
 // Apply a single rule

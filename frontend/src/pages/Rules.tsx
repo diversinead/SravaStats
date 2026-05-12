@@ -5,6 +5,8 @@ import {
   deleteRule,
   applyRules,
   applySingleRule,
+  undoRulesApply,
+  getRulesUndoAvailable,
   type Rule,
 } from "../api/client";
 
@@ -26,7 +28,6 @@ const TRAINING_CATEGORIES = [
   "Gravel Workout",
   "Grass Track",
   "Strides",
-  "Cross Training",
   "Heat Run",
 ];
 
@@ -40,9 +41,129 @@ const WORKOUT_TYPES: Record<number, string> = {
   12: "Workout (Ride)",
 };
 
+// UI-only condition types pace_faster / pace_slower both serialize to the
+// backend's "pace_range" rule with a single bound set.
+const CONDITION_TYPES: { value: string; label: string }[] = [
+  { value: "day_of_week", label: "Day of Week" },
+  { value: "name_contains", label: "Name Contains" },
+  { value: "sport_type", label: "Sport Type" },
+  { value: "date_range", label: "Date Range" },
+  { value: "duration_range", label: "Duration Range" },
+  { value: "distance_range", label: "Distance Range" },
+  { value: "pace_faster", label: "Pace faster than" },
+  { value: "pace_slower", label: "Pace slower than" },
+  { value: "workout_type", label: "Workout Type" },
+  { value: "location", label: "Location" },
+];
+
+// One condition row in either the simple form or a compound rule. All input
+// fields live here so the editor can hold partial text while the user types.
+interface EditableCondition {
+  type: string;
+  day: number;
+  pattern: string;
+  sport: string;
+  dateFrom: string;
+  dateTo: string;
+  durationMin: string;
+  durationMax: string;
+  distanceMin: string;
+  distanceMax: string;
+  pace: string;
+  workoutType: number;
+  location: string;
+}
+
+function emptyCondition(): EditableCondition {
+  return {
+    type: "day_of_week",
+    day: 0,
+    pattern: "",
+    sport: "Run",
+    dateFrom: "",
+    dateTo: "",
+    durationMin: "",
+    durationMax: "",
+    distanceMin: "",
+    distanceMax: "",
+    pace: "",
+    workoutType: 1,
+    location: "",
+  };
+}
+
+function serializeCondition(c: EditableCondition): { ruleType: string; ruleValue: any } | null {
+  switch (c.type) {
+    case "day_of_week":
+      return { ruleType: c.type, ruleValue: { day: c.day } };
+    case "name_contains":
+      if (!c.pattern.trim()) return null;
+      return { ruleType: c.type, ruleValue: { pattern: c.pattern.trim() } };
+    case "sport_type":
+      if (!c.sport.trim()) return null;
+      return { ruleType: c.type, ruleValue: { sport: c.sport.trim() } };
+    case "date_range":
+      if (!c.dateFrom && !c.dateTo) return null;
+      return {
+        ruleType: c.type,
+        ruleValue: {
+          ...(c.dateFrom && { from: c.dateFrom }),
+          ...(c.dateTo && { to: c.dateTo }),
+        },
+      };
+    case "duration_range": {
+      const minSec = c.durationMin ? parseDurationToSeconds(c.durationMin) : null;
+      const maxSec = c.durationMax ? parseDurationToSeconds(c.durationMax) : null;
+      if (minSec == null && maxSec == null) return null;
+      return {
+        ruleType: c.type,
+        ruleValue: {
+          ...(minSec != null && { minSeconds: minSec }),
+          ...(maxSec != null && { maxSeconds: maxSec }),
+        },
+      };
+    }
+    case "distance_range": {
+      const minM = c.distanceMin ? Number(c.distanceMin) * 1000 : null;
+      const maxM = c.distanceMax ? Number(c.distanceMax) * 1000 : null;
+      if ((minM == null || isNaN(minM)) && (maxM == null || isNaN(maxM))) return null;
+      return {
+        ruleType: c.type,
+        ruleValue: {
+          ...(minM != null && !isNaN(minM) && { minMeters: minM }),
+          ...(maxM != null && !isNaN(maxM) && { maxMeters: maxM }),
+        },
+      };
+    }
+    case "pace_faster": {
+      // pace faster than X → activity must be at least that fast → speed floor.
+      const speed = c.pace ? parsePaceToSpeed(c.pace) : null;
+      if (speed == null) return null;
+      return { ruleType: "pace_range", ruleValue: { minSpeedMs: speed } };
+    }
+    case "pace_slower": {
+      // pace slower than X → activity must be at most that fast → speed ceiling.
+      const speed = c.pace ? parsePaceToSpeed(c.pace) : null;
+      if (speed == null) return null;
+      return { ruleType: "pace_range", ruleValue: { maxSpeedMs: speed } };
+    }
+    case "workout_type":
+      return { ruleType: c.type, ruleValue: { workoutType: c.workoutType } };
+    case "location":
+      if (!c.location.trim()) return null;
+      return { ruleType: c.type, ruleValue: { timezone: c.location.trim() } };
+    default:
+      return null;
+  }
+}
+
 function describeRule(rule: Rule): string {
-  const val = JSON.parse(rule.ruleValue);
-  switch (rule.ruleType) {
+  return describeRuleParts(rule.ruleType, rule.ruleValue);
+}
+
+function describeRuleParts(ruleType: string, ruleValue: string | object): string {
+  const val: any = typeof ruleValue === "string" ? JSON.parse(ruleValue) : ruleValue;
+  switch (ruleType) {
     case "day_of_week":
       return `Day = ${DAYS[val.day] || val.day}`;
     case "name_contains":
@@ -69,16 +190,21 @@ function describeRule(rule: Rule): string {
     }
     case "pace_range": {
       const parts: string[] = [];
-      if (val.maxSpeedMs != null) parts.push(`min ${formatPaceFromSpeed(val.maxSpeedMs)}`);
-      if (val.minSpeedMs != null) parts.push(`max ${formatPaceFromSpeed(val.minSpeedMs)}`);
+      if (val.minSpeedMs != null) parts.push(`faster than ${formatPaceFromSpeed(val.minSpeedMs)}`);
+      if (val.maxSpeedMs != null) parts.push(`slower than ${formatPaceFromSpeed(val.maxSpeedMs)}`);
       return `Pace ${parts.join(", ")}`;
     }
     case "workout_type":
       return `Type = ${WORKOUT_TYPES[val.workoutType] || `#${val.workoutType}`}`;
     case "location":
       return `Location contains "${val.timezone}"`;
+    case "compound": {
+      const subs = (val.conditions || []) as { ruleType: string; ruleValue: any }[];
+      if (subs.length === 0) return "(empty compound rule)";
+      return subs.map((s) => describeRuleParts(s.ruleType, s.ruleValue)).join(" AND ");
+    }
     default:
-      return rule.ruleValue;
+      return typeof ruleValue === "string" ? ruleValue : JSON.stringify(val);
   }
 }
 
@@ -121,29 +247,149 @@ function parseDurationToSeconds(value: string): number | null {
   return null;
 }
 
+function ConditionEditor({
+  value,
+  onChange,
+  onRemove,
+}: {
+  value: EditableCondition;
+  onChange: (v: EditableCondition) => void;
+  onRemove?: () => void;
+}) {
+  const set = (patch: Partial<EditableCondition>) => onChange({ ...value, ...patch });
+
+  return (
+    <div className="form-row" style={{ marginBottom: "0.4rem" }}>
+      <select value={value.type} onChange={(e) => set({ type: e.target.value })}>
+        {CONDITION_TYPES.map((t) => (
+          <option key={t.value} value={t.value}>{t.label}</option>
+        ))}
+      </select>
+
+      {value.type === "day_of_week" && (
+        <select value={value.day} onChange={(e) => set({ day: Number(e.target.value) })}>
+          {DAYS.map((d, i) => (
+            <option key={i} value={i}>{d}</option>
+          ))}
+        </select>
+      )}
+
+      {value.type === "name_contains" && (
+        <input
+          type="text"
+          placeholder="Pattern (e.g. tempo)"
+          value={value.pattern}
+          onChange={(e) => set({ pattern: e.target.value })}
+        />
+      )}
+
+      {value.type === "sport_type" && (
+        <input
+          type="text"
+          placeholder="Sport (e.g. Run, Ride)"
+          value={value.sport}
+          onChange={(e) => set({ sport: e.target.value })}
+        />
+      )}
+
+      {value.type === "date_range" && (
+        <>
+          <label style={{ color: "#94a3b8", fontSize: "0.85rem" }}>From</label>
+          <input type="date" value={value.dateFrom} onChange={(e) => set({ dateFrom: e.target.value })} />
+          <label style={{ color: "#94a3b8", fontSize: "0.85rem" }}>To</label>
+          <input type="date" value={value.dateTo} onChange={(e) => set({ dateTo: e.target.value })} />
+        </>
+      )}
+
+      {value.type === "duration_range" && (
+        <>
+          <input
+            type="text"
+            placeholder="Min (e.g. 30m, 1h30m)"
+            value={value.durationMin}
+            onChange={(e) => set({ durationMin: e.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Max (e.g. 60m, 2h)"
+            value={value.durationMax}
+            onChange={(e) => set({ durationMax: e.target.value })}
+          />
+        </>
+      )}
+
+      {value.type === "distance_range" && (
+        <>
+          <input
+            type="text"
+            placeholder="Min km (e.g. 5)"
+            value={value.distanceMin}
+            onChange={(e) => set({ distanceMin: e.target.value })}
+          />
+          <input
+            type="text"
+            placeholder="Max km (e.g. 10)"
+            value={value.distanceMax}
+            onChange={(e) => set({ distanceMax: e.target.value })}
+          />
+        </>
+      )}
+
+      {(value.type === "pace_faster" || value.type === "pace_slower") && (
+        <>
+          <input
+            type="text"
+            placeholder="e.g. 4:00"
+            value={value.pace}
+            onChange={(e) => set({ pace: e.target.value })}
+          />
+          <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>/km</span>
+        </>
+      )}
+
+      {value.type === "workout_type" && (
+        <select
+          value={value.workoutType}
+          onChange={(e) => set({ workoutType: Number(e.target.value) })}
+        >
+          {Object.entries(WORKOUT_TYPES).map(([val, label]) => (
+            <option key={val} value={val}>{label}</option>
+          ))}
+        </select>
+      )}
+
+      {value.type === "location" && (
+        <input
+          type="text"
+          placeholder="Timezone (e.g. Europe/London, America)"
+          value={value.location}
+          onChange={(e) => set({ location: e.target.value })}
+          style={{ minWidth: "260px" }}
+        />
+      )}
+
+      {onRemove && (
+        <button onClick={onRemove} className="btn btn-sm btn-danger" type="button" title="Remove condition">
+          ✕
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function RulesPage() {
   const [rules, setRules] = useState<Rule[]>([]);
   const [applyResult, setApplyResult] = useState<string | null>(null);
   const [ruleResults, setRuleResults] = useState<Record<number, string>>({});
+  const [canUndo, setCanUndo] = useState(false);
 
-  // New rule form
-  const [ruleType, setRuleType] = useState("day_of_week");
+  const [mode, setMode] = useState<"single" | "compound">("single");
   const [category, setCategory] = useState("");
-
-  // Rule-specific values
-  const [dayValue, setDayValue] = useState(0);
-  const [patternValue, setPatternValue] = useState("");
-  const [sportValue, setSportValue] = useState("Run");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const [durationMin, setDurationMin] = useState("");
-  const [durationMax, setDurationMax] = useState("");
-  const [distanceMin, setDistanceMin] = useState("");
-  const [distanceMax, setDistanceMax] = useState("");
-  const [paceMin, setPaceMin] = useState("");
-  const [paceMax, setPaceMax] = useState("");
-  const [workoutTypeValue, setWorkoutTypeValue] = useState(1);
-  const [locationValue, setLocationValue] = useState("");
+  const [condition, setCondition] = useState<EditableCondition>(emptyCondition());
+  const [compoundConditions, setCompoundConditions] = useState<EditableCondition[]>([
+    emptyCondition(),
+    emptyCondition(),
+  ]);
 
   const load = () => {
     getRules().then(setRules);
@@ -151,85 +397,58 @@ export default function RulesPage() {
 
   useEffect(() => {
     load();
+    getRulesUndoAvailable().then((r) => setCanUndo(r.available)).catch(() => {});
   }, []);
 
   const handleCreate = async () => {
     if (!category) return;
 
+    let ruleType: string;
     let ruleValue: string;
-    switch (ruleType) {
-      case "day_of_week":
-        ruleValue = JSON.stringify({ day: dayValue });
-        break;
-      case "name_contains":
-        if (!patternValue.trim()) return;
-        ruleValue = JSON.stringify({ pattern: patternValue.trim() });
-        break;
-      case "sport_type":
-        if (!sportValue.trim()) return;
-        ruleValue = JSON.stringify({ sport: sportValue.trim() });
-        break;
-      case "date_range":
-        if (!dateFrom && !dateTo) return;
-        ruleValue = JSON.stringify({
-          ...(dateFrom && { from: dateFrom }),
-          ...(dateTo && { to: dateTo }),
-        });
-        break;
-      case "duration_range": {
-        const minSec = durationMin ? parseDurationToSeconds(durationMin) : null;
-        const maxSec = durationMax ? parseDurationToSeconds(durationMax) : null;
-        if (minSec == null && maxSec == null) return;
-        ruleValue = JSON.stringify({
-          ...(minSec != null && { minSeconds: minSec }),
-          ...(maxSec != null && { maxSeconds: maxSec }),
-        });
-        break;
-      }
-      case "distance_range": {
-        const minM = distanceMin ? Number(distanceMin) * 1000 : null;
-        const maxM = distanceMax ? Number(distanceMax) * 1000 : null;
-        if ((minM == null || isNaN(minM)) && (maxM == null || isNaN(maxM))) return;
-        ruleValue = JSON.stringify({
-          ...(minM != null && !isNaN(minM) && { minMeters: minM }),
-          ...(maxM != null && !isNaN(maxM) && { maxMeters: maxM }),
-        });
-        break;
-      }
-      case "pace_range": {
-        const minSpeed = paceMax ? parsePaceToSpeed(paceMax) : null; // slower pace = lower speed
-        const maxSpeed = paceMin ? parsePaceToSpeed(paceMin) : null; // faster pace = higher speed
-        if (minSpeed == null && maxSpeed == null) return;
-        ruleValue = JSON.stringify({
-          ...(minSpeed != null && { minSpeedMs: minSpeed }),
-          ...(maxSpeed != null && { maxSpeedMs: maxSpeed }),
-        });
-        break;
-      }
-      case "workout_type":
-        ruleValue = JSON.stringify({ workoutType: workoutTypeValue });
-        break;
-      case "location":
-        if (!locationValue.trim()) return;
-        ruleValue = JSON.stringify({ timezone: locationValue.trim() });
-        break;
-      default:
-        return;
+
+    if (mode === "single") {
+      const s = serializeCondition(condition);
+      if (!s) return;
+      ruleType = s.ruleType;
+      ruleValue = JSON.stringify(s.ruleValue);
+    } else {
+      const serialized = compoundConditions
+        .map(serializeCondition)
+        .filter((s): s is { ruleType: string; ruleValue: any } => s != null);
+      if (serialized.length === 0) return;
+      ruleType = "compound";
+      ruleValue = JSON.stringify({ conditions: serialized });
     }
 
     await createRule({ category, ruleType, ruleValue });
     load();
+    if (mode === "single") setCondition(emptyCondition());
+    else setCompoundConditions([emptyCondition(), emptyCondition()]);
   };
 
   const handleApply = async () => {
     const result = await applyRules();
     setApplyResult(`Updated ${result.applied} activities`);
+    setCanUndo(true);
     load();
   };
 
   const handleApplySingle = async (id: number) => {
     const result = await applySingleRule(id);
     setRuleResults((prev) => ({ ...prev, [id]: `Updated ${result.applied} activities` }));
+    setCanUndo(true);
+  };
+
+  const handleUndo = async () => {
+    try {
+      const result = await undoRulesApply();
+      setApplyResult(`Reverted ${result.restored} activities`);
+      setCanUndo(false);
+      setRuleResults({});
+      load();
+    } catch (e: any) {
+      setApplyResult(e.message || "Nothing to undo");
+    }
   };
 
   const handleDelete = async (id: number) => {
@@ -244,16 +463,9 @@ export default function RulesPage() {
       <div className="card">
         <h2>Create Rule</h2>
         <div className="form-row" style={{ marginBottom: "0.5rem" }}>
-          <select value={ruleType} onChange={(e) => setRuleType(e.target.value)}>
-            <option value="day_of_week">Day of Week</option>
-            <option value="name_contains">Name Contains</option>
-            <option value="sport_type">Sport Type</option>
-            <option value="date_range">Date Range</option>
-            <option value="duration_range">Duration Range</option>
-            <option value="distance_range">Distance Range</option>
-            <option value="pace_range">Pace Range</option>
-            <option value="workout_type">Workout Type</option>
-            <option value="location">Location</option>
+          <select value={mode} onChange={(e) => setMode(e.target.value as "single" | "compound")}>
+            <option value="single">Single condition</option>
+            <option value="compound">Compound (all must match)</option>
           </select>
 
           <select value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -268,121 +480,52 @@ export default function RulesPage() {
           </button>
         </div>
 
-        <div className="form-row">
-          {ruleType === "day_of_week" && (
-            <select value={dayValue} onChange={(e) => setDayValue(Number(e.target.value))}>
-              {DAYS.map((d, i) => (
-                <option key={i} value={i}>{d}</option>
-              ))}
-            </select>
-          )}
-
-          {ruleType === "name_contains" && (
-            <input
-              type="text"
-              placeholder="Pattern (e.g. tempo)"
-              value={patternValue}
-              onChange={(e) => setPatternValue(e.target.value)}
-            />
-          )}
-
-          {ruleType === "sport_type" && (
-            <input
-              type="text"
-              placeholder="Sport (e.g. Run, Ride)"
-              value={sportValue}
-              onChange={(e) => setSportValue(e.target.value)}
-            />
-          )}
-
-          {ruleType === "date_range" && (
-            <>
-              <label style={{ color: "#94a3b8", fontSize: "0.85rem" }}>From</label>
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-              <label style={{ color: "#94a3b8", fontSize: "0.85rem" }}>To</label>
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-            </>
-          )}
-
-          {ruleType === "duration_range" && (
-            <>
-              <input
-                type="text"
-                placeholder="Min (e.g. 30m, 1h30m)"
-                value={durationMin}
-                onChange={(e) => setDurationMin(e.target.value)}
+        {mode === "single" ? (
+          <ConditionEditor value={condition} onChange={setCondition} />
+        ) : (
+          <>
+            {compoundConditions.map((c, i) => (
+              <ConditionEditor
+                key={i}
+                value={c}
+                onChange={(nc) => {
+                  const next = [...compoundConditions];
+                  next[i] = nc;
+                  setCompoundConditions(next);
+                }}
+                onRemove={
+                  compoundConditions.length > 1
+                    ? () => setCompoundConditions(compoundConditions.filter((_, j) => j !== i))
+                    : undefined
+                }
               />
-              <input
-                type="text"
-                placeholder="Max (e.g. 60m, 2h)"
-                value={durationMax}
-                onChange={(e) => setDurationMax(e.target.value)}
-              />
-            </>
-          )}
-
-          {ruleType === "distance_range" && (
-            <>
-              <input
-                type="text"
-                placeholder="Min km (e.g. 5)"
-                value={distanceMin}
-                onChange={(e) => setDistanceMin(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder="Max km (e.g. 10)"
-                value={distanceMax}
-                onChange={(e) => setDistanceMax(e.target.value)}
-              />
-            </>
-          )}
-
-          {ruleType === "pace_range" && (
-            <>
-              <input
-                type="text"
-                placeholder="Min pace (e.g. 4:10)"
-                value={paceMin}
-                onChange={(e) => setPaceMin(e.target.value)}
-              />
-              <input
-                type="text"
-                placeholder="Max pace (e.g. 5:00)"
-                value={paceMax}
-                onChange={(e) => setPaceMax(e.target.value)}
-              />
-              <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>/km</span>
-            </>
-          )}
-
-          {ruleType === "workout_type" && (
-            <select
-              value={workoutTypeValue}
-              onChange={(e) => setWorkoutTypeValue(Number(e.target.value))}
+            ))}
+            <button
+              onClick={() => setCompoundConditions([...compoundConditions, emptyCondition()])}
+              className="btn btn-sm"
+              type="button"
+              style={{ marginTop: "0.25rem" }}
             >
-              {Object.entries(WORKOUT_TYPES).map(([val, label]) => (
-                <option key={val} value={val}>{label}</option>
-              ))}
-            </select>
-          )}
-
-          {ruleType === "location" && (
-            <input
-              type="text"
-              placeholder="Timezone (e.g. Europe/London, America)"
-              value={locationValue}
-              onChange={(e) => setLocationValue(e.target.value)}
-              style={{ minWidth: "260px" }}
-            />
-          )}
-        </div>
+              + Add condition
+            </button>
+          </>
+        )}
       </div>
 
       <div className="card">
         <div className="card-header">
           <h2>Rules</h2>
-          <button onClick={handleApply} className="btn btn-primary">Apply All Rules</button>
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <button
+              onClick={handleUndo}
+              className="btn btn-sm"
+              disabled={!canUndo}
+              title="Revert the last Apply"
+            >
+              Undo Last Apply
+            </button>
+            <button onClick={handleApply} className="btn btn-primary">Apply All Rules</button>
+          </div>
         </div>
         {applyResult && <p className="sync-result">{applyResult}</p>}
 

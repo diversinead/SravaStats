@@ -15,9 +15,16 @@ interface RuleValue {
   maxSpeedMs?: number;
   workoutType?: number;
   timezone?: string;
+  // compound: all conditions must match
+  conditions?: { ruleType: string; ruleValue: unknown }[];
 }
 
 type Activity = typeof schema.activities.$inferSelect;
+
+// In-memory undo log: keeps only the most recent apply per user so the UI can
+// revert a misfired rule. Cleared on undo or on the next apply.
+type UndoEntry = { activityId: number; prevCategory: string | null };
+const undoSnapshots = new Map<number, UndoEntry[]>();
 
 export function matchesRule(
   activity: Activity,
@@ -81,6 +88,14 @@ export function matchesRule(
         ? (activity.timezone || "").toLowerCase().includes(val.timezone.toLowerCase())
         : false;
 
+    case "compound": {
+      const subs = val.conditions || [];
+      if (subs.length === 0) return false;
+      return subs.every((c) =>
+        matchesRule(activity, c.ruleType, JSON.stringify(c.ruleValue))
+      );
+    }
+
     default:
       return false;
   }
@@ -105,6 +120,7 @@ export function applyRulesToActivities(userId: number) {
     .where(eq(schema.activities.userId, userId))
     .all();
 
+  const snapshot: UndoEntry[] = [];
   let applied = 0;
 
   for (const activity of activities) {
@@ -112,6 +128,7 @@ export function applyRulesToActivities(userId: number) {
       if (matchesRule(activity, rule.ruleType, rule.ruleValue)) {
         // Only set category if not already set (don't overwrite manual choices)
         if (!activity.trainingCategory) {
+          snapshot.push({ activityId: activity.id, prevCategory: activity.trainingCategory });
           db.update(schema.activities)
             .set({ trainingCategory: rule.category })
             .where(eq(schema.activities.id, activity.id))
@@ -123,6 +140,7 @@ export function applyRulesToActivities(userId: number) {
     }
   }
 
+  undoSnapshots.set(userId, snapshot);
   return applied;
 }
 
@@ -146,11 +164,13 @@ export function applySingleRule(userId: number, ruleId: number) {
     .where(eq(schema.activities.userId, userId))
     .all();
 
+  const snapshot: UndoEntry[] = [];
   let applied = 0;
 
   for (const activity of activities) {
     if (matchesRule(activity, rule.ruleType, rule.ruleValue)) {
       if (activity.trainingCategory !== rule.category) {
+        snapshot.push({ activityId: activity.id, prevCategory: activity.trainingCategory });
         db.update(schema.activities)
           .set({ trainingCategory: rule.category })
           .where(eq(schema.activities.id, activity.id))
@@ -160,7 +180,29 @@ export function applySingleRule(userId: number, ruleId: number) {
     }
   }
 
+  undoSnapshots.set(userId, snapshot);
   return applied;
+}
+
+export function undoLastApply(userId: number): number | null {
+  const snapshot = undoSnapshots.get(userId);
+  if (!snapshot) return null;
+
+  for (const entry of snapshot) {
+    db.update(schema.activities)
+      .set({ trainingCategory: entry.prevCategory })
+      .where(eq(schema.activities.id, entry.activityId))
+      .run();
+  }
+
+  const restored = snapshot.length;
+  undoSnapshots.delete(userId);
+  return restored;
+}
+
+export function hasUndo(userId: number): boolean {
+  const s = undoSnapshots.get(userId);
+  return !!s && s.length > 0;
 }
 
 export function previewRule(
