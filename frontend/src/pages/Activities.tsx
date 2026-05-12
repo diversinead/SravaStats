@@ -13,6 +13,8 @@ import {
   type RepStructure,
 } from "../api/client";
 import CompareModal from "./CompareModal";
+import CoachPlot from "./CoachPlot";
+import { formatMarkdown } from "../lib/markdown";
 import "./Coach.css";
 import "./Activities.css";
 
@@ -27,7 +29,6 @@ const TRAINING_CATEGORIES = [
   "Intervals",
   "Race",
   "WU/CD",
-  "Cross Training",
   "Heat Run",
   "Treadmill",
 ];
@@ -42,7 +43,6 @@ const CATEGORY_CLASS: Record<string, string> = {
   "Intervals": "cat-interval",
   "Race": "cat-race",
   "WU/CD": "cat-warmup",
-  "Cross Training": "cat-crosstraining",
   "Heat Run": "cat-easy",
   "Treadmill": "cat-easy",
 };
@@ -54,12 +54,46 @@ function categoryClass(cat: string | null | undefined): string {
 
 const UNCATEGORISED = "__uncategorised__";
 
+// Category chip order in the filter bar. Intentionally differs from
+// TRAINING_CATEGORIES (which drives the per-row edit dropdown).
+const FILTER_CATEGORIES: string[] = [
+  "Intervals",
+  "Threshold",
+  "Marathon Session",
+  "Long Run",
+  "Race",
+  "Heat Run",
+  "Easy Run",
+  "Recovery Run",
+  "Treadmill",
+  UNCATEGORISED,
+  "WU/CD",
+];
+
+// Label overrides for the filter chips only — values stay as the real
+// trainingCategory string so filter logic is unaffected.
+const FILTER_LABELS: Record<string, string> = {
+  "Recovery Run": "Rec Run",
+  [UNCATEGORISED]: "Uncategorised",
+};
+
 const DATE_PRESETS: { label: string; days: number | null }[] = [
   { label: "30d", days: 30 },
   { label: "90d", days: 90 },
   { label: "1y", days: 365 },
   { label: "2y", days: 730 },
   { label: "All", days: null },
+];
+
+// Starter prompts surfaced as clickable chips so the user doesn't stare at an
+// empty input. Picked to lean on things the chart alone can't answer.
+const QUESTION_SUGGESTIONS: string[] = [
+  "Is my HR drifting up at the same paces, or am I just running harder?",
+  "Which sessions look like breakthroughs vs. bad days?",
+  "Am I getting fitter, or just trying harder?",
+  "Any signs of fatigue or overreaching recently?",
+  "How consistent is my pace across reps in a session?",
+  "Compare my pace and HR trends side by side",
 ];
 
 function isoToday(): string {
@@ -469,52 +503,6 @@ function NameCell({
   );
 }
 
-// Line-based markdown → HTML for the AI response bubble (headers, lists, hr,
-// blockquotes, paragraphs, inline bold/italic/code).
-function formatMarkdown(text: string): string {
-  const lines = text.split("\n");
-  const out: string[] = [];
-  let inList = false;
-  let inBQ = false;
-  let para: string[] = [];
-  const flushPara = () => { if (para.length) { out.push(`<p>${para.join(" ")}</p>`); para = []; } };
-  const closeList = () => { if (inList) { out.push("</ul>"); inList = false; } };
-  const closeBQ = () => { if (inBQ) { out.push("</blockquote>"); inBQ = false; } };
-  const closeAll = () => { flushPara(); closeList(); closeBQ(); };
-  for (const raw of lines) {
-    const line = raw.trimEnd();
-    if (!line.trim()) { closeAll(); continue; }
-    let m: RegExpMatchArray | null;
-    if ((m = line.match(/^####\s+(.*)$/))) { closeAll(); out.push(`<h4>${formatInline(m[1])}</h4>`); }
-    else if ((m = line.match(/^###\s+(.*)$/))) { closeAll(); out.push(`<h3>${formatInline(m[1])}</h3>`); }
-    else if ((m = line.match(/^##\s+(.*)$/))) { closeAll(); out.push(`<h2>${formatInline(m[1])}</h2>`); }
-    else if (/^---+$/.test(line)) { closeAll(); out.push("<hr>"); }
-    else if ((m = line.match(/^[-*]\s+(.*)$/))) {
-      flushPara(); closeBQ();
-      if (!inList) { out.push("<ul>"); inList = true; }
-      out.push(`<li>${formatInline(m[1])}</li>`);
-    } else if ((m = line.match(/^>\s?(.*)$/))) {
-      flushPara(); closeList();
-      if (!inBQ) { out.push("<blockquote>"); inBQ = true; }
-      out.push(`<p>${formatInline(m[1])}</p>`);
-    } else {
-      closeList(); closeBQ();
-      para.push(formatInline(line));
-    }
-  }
-  closeAll();
-  return out.join("\n");
-}
-function formatInline(s: string): string {
-  return escapeHtml(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
 type SortKey = "date" | "name" | "type" | "distance" | "pace" | "duration" | "hr";
 
 function SortHeader({ label, field, current, order, onSort }: {
@@ -534,7 +522,6 @@ function SortHeader({ label, field, current, order, onSort }: {
 }
 
 interface Filters {
-  sport_type: string;
   // "__uncategorised__" sits alongside real categories in the array and
   // expands to IS NULL on the backend.
   categories: string[];
@@ -544,7 +531,6 @@ interface Filters {
 }
 
 const INITIAL_FILTERS: Filters = {
-  sport_type: "",
   categories: [],
   from: "",
   to: "",
@@ -558,7 +544,9 @@ export default function Activities() {
   const [sortBy, setSortBy] = useState<SortKey>("date");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [total, setTotal] = useState(0);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Selection is cached as full Activity objects so rows ticked on one page
+  // remain available for Compare/bulk after paginating, filtering, or sorting.
+  const [selectedMap, setSelectedMap] = useState<Map<number, Activity>>(new Map());
   const [bulkCategory, setBulkCategory] = useState("");
 
   const [question, setQuestion] = useState("");
@@ -576,7 +564,6 @@ export default function Activities() {
       sort_by: sortBy,
       order: sortOrder,
     };
-    if (filters.sport_type) params.sport_type = filters.sport_type;
     if (filters.categories.length > 0) params.category = filters.categories;
     if (filters.from) params.from = filters.from;
     if (filters.to) params.to = filters.to;
@@ -584,7 +571,16 @@ export default function Activities() {
     getActivities(params).then((r) => {
       setActivities(r.activities);
       setTotal(r.total);
-      setSelected(new Set());
+      // Don't clear selection — user may be assembling a cross-page set.
+      // Refresh cached copies for any selected rows that appear on this page.
+      setSelectedMap((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Map(prev);
+        for (const a of r.activities) {
+          if (next.has(a.id)) next.set(a.id, a);
+        }
+        return next;
+      });
     });
   };
 
@@ -600,57 +596,76 @@ export default function Activities() {
     setPage(1);
   };
 
+  // Patch an activity in both the visible list and the selection cache so the
+  // Compare modal and bulk ops keep seeing fresh data even after edits.
+  const patchActivity = (id: number, patch: Partial<Activity>) => {
+    setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch } : a)));
+    setSelectedMap((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
+      next.set(id, { ...next.get(id)!, ...patch });
+      return next;
+    });
+  };
+
   const handleCategoryUpdated = (id: number, category: string | null) => {
-    setActivities((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, trainingCategory: category } : a))
-    );
+    patchActivity(id, { trainingCategory: category });
   };
   const handleStructureUpdated = (
     id: number,
     structure: RepStructure | null
   ) => {
-    setActivities((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, repStructure: structure } : a))
-    );
+    patchActivity(id, { repStructure: structure });
   };
   const handleRenamed = (id: number, name: string) => {
-    setActivities((prev) =>
-      prev.map((a) => (a.id === id ? { ...a, name } : a))
-    );
+    patchActivity(id, { name });
   };
-  const toggleSelect = (id: number) => {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+  const toggleSelect = (a: Activity) => {
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      if (next.has(a.id)) next.delete(a.id); else next.set(a.id, a);
       return next;
     });
   };
+  const allOnPageSelected =
+    activities.length > 0 && activities.every((a) => selectedMap.has(a.id));
   const toggleSelectAll = () => {
-    if (selected.size === activities.length) setSelected(new Set());
-    else setSelected(new Set(activities.map((a) => a.id)));
+    setSelectedMap((prev) => {
+      const next = new Map(prev);
+      if (allOnPageSelected) {
+        for (const a of activities) next.delete(a.id);
+      } else {
+        for (const a of activities) next.set(a.id, a);
+      }
+      return next;
+    });
   };
 
+  const selectedOnOtherPages =
+    [...selectedMap.keys()].filter((id) => !activities.some((a) => a.id === id)).length;
+
   const handleBulkAssign = async () => {
-    if (selected.size === 0 || !bulkCategory) return;
+    if (selectedMap.size === 0 || !bulkCategory) return;
     const category = bulkCategory === "__clear__" ? null : bulkCategory;
-    await bulkUpdateCategory([...selected], category);
+    const ids = [...selectedMap.keys()];
+    await bulkUpdateCategory(ids, category);
     setActivities((prev) =>
-      prev.map((a) => selected.has(a.id) ? { ...a, trainingCategory: category } : a)
+      prev.map((a) => selectedMap.has(a.id) ? { ...a, trainingCategory: category } : a)
     );
-    setSelected(new Set());
+    setSelectedMap(new Map());
     setBulkCategory("");
   };
 
   const handleBulkStructure = async (structure: RepStructure | null) => {
-    if (selected.size === 0) return;
-    const ids = [...selected];
+    if (selectedMap.size === 0) return;
+    const ids = [...selectedMap.keys()];
     await bulkUpdateStructure(ids, structure);
     setActivities((prev) =>
       prev.map((a) =>
-        selected.has(a.id) ? { ...a, repStructure: structure } : a
+        selectedMap.has(a.id) ? { ...a, repStructure: structure } : a
       )
     );
-    setSelected(new Set());
+    setSelectedMap(new Map());
   };
 
   const toggleFilterCategory = (cat: string) => {
@@ -681,17 +696,18 @@ export default function Activities() {
       from: filters.from || undefined,
       to: filters.to || undefined,
       search: filters.search || undefined,
-      sportType: filters.sport_type || undefined,
     }),
     [filters]
   );
 
-  const askAI = async () => {
-    if (!question.trim() || insightLoading) return;
+  const askAI = async (overrideQuestion?: string) => {
+    const q = (overrideQuestion ?? question).trim();
+    if (!q || insightLoading) return;
+    if (overrideQuestion !== undefined) setQuestion(overrideQuestion);
     setInsightLoading(true);
     setInsightError(null);
     try {
-      const res = await getAIInsight({ question, filters: activeFilterOpts });
+      const res = await getAIInsight({ question: q, filters: activeFilterOpts });
       setInsight(res);
       setInsightOpen(true);
     } catch (err) {
@@ -707,8 +723,8 @@ export default function Activities() {
   };
 
   const selectedActivities = useMemo(
-    () => activities.filter((a) => selected.has(a.id)).map(activityToAI),
-    [activities, selected]
+    () => [...selectedMap.values()].map(activityToAI),
+    [selectedMap]
   );
 
   return (
@@ -726,12 +742,6 @@ export default function Activities() {
           placeholder="Search name..."
           value={filters.search}
           onChange={(e) => { setFilters({ ...filters, search: e.target.value }); setPage(1); }}
-        />
-        <input
-          type="text"
-          placeholder="Sport type (e.g. Run)"
-          value={filters.sport_type}
-          onChange={(e) => { setFilters({ ...filters, sport_type: e.target.value }); setPage(1); }}
         />
         <input
           type="date"
@@ -760,32 +770,23 @@ export default function Activities() {
       <div className="category-filter-bar card">
         <span className="filter-label">Categories:</span>
         <div className="category-chips">
-          {TRAINING_CATEGORIES.map((cat) => {
+          {FILTER_CATEGORIES.map((cat) => {
             const on = filters.categories.includes(cat);
+            const label = FILTER_LABELS[cat] ?? cat;
             return (
               <label
                 key={cat}
-                className={`bucket-chip cat-chip ${categoryClass(cat)} ${on ? "is-on" : ""}`}
+                className={`bucket-chip cat-chip ${categoryClass(cat === UNCATEGORISED ? null : cat)} ${on ? "is-on" : ""}`}
               >
                 <input
                   type="checkbox"
                   checked={on}
                   onChange={() => toggleFilterCategory(cat)}
                 />
-                <span>{cat}</span>
+                <span>{label}</span>
               </label>
             );
           })}
-          <label
-            className={`bucket-chip cat-chip cat-none ${filters.categories.includes(UNCATEGORISED) ? "is-on" : ""}`}
-          >
-            <input
-              type="checkbox"
-              checked={filters.categories.includes(UNCATEGORISED)}
-              onChange={() => toggleFilterCategory(UNCATEGORISED)}
-            />
-            <span>Uncategorised</span>
-          </label>
           {filters.categories.length > 0 && (
             <button
               type="button"
@@ -825,6 +826,22 @@ export default function Activities() {
           </button>
         </form>
 
+        <div className="coach-suggestions">
+          <span className="coach-suggestions-label">Try:</span>
+          {QUESTION_SUGGESTIONS.map((s) => (
+            <button
+              key={s}
+              type="button"
+              className="coach-suggestion-chip"
+              onClick={() => askAI(s)}
+              disabled={insightLoading}
+              title={s}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
         {insightError && <div className="coach-error">Error: {insightError}</div>}
 
         {insightLoading && (
@@ -833,6 +850,8 @@ export default function Activities() {
             <div className="coach-loading-text">Crunching the filtered set…</div>
           </div>
         )}
+
+        <CoachPlot filterOpts={activeFilterOpts} />
 
         {insight && !insightLoading && (
           <div className="message message--assistant">
@@ -875,9 +894,17 @@ export default function Activities() {
         )}
       </div>
 
-      {selected.size > 0 && (
+      {selectedMap.size > 0 && (
         <div className="bulk-bar card">
-          <span>{selected.size} selected</span>
+          <span>
+            {selectedMap.size} selected
+            {selectedOnOtherPages > 0 && (
+              <span style={{ color: "#94a3b8", fontWeight: 400 }}>
+                {" "}
+                ({selectedOnOtherPages} on other pages)
+              </span>
+            )}
+          </span>
           <span>Category:</span>
           <select value={bulkCategory} onChange={(e) => setBulkCategory(e.target.value)}>
             <option value="">Assign…</option>
@@ -895,18 +922,18 @@ export default function Activities() {
           </button>
           <BulkStructureControl
             onApply={handleBulkStructure}
-            disabled={selected.size === 0}
+            disabled={selectedMap.size === 0}
           />
           <span className="bulk-sep">|</span>
           <button
             onClick={() => setShowCompare(true)}
             className="btn btn-sm"
-            disabled={selected.size < 2}
-            title={selected.size < 2 ? "Select at least 2 rows" : undefined}
+            disabled={selectedMap.size < 2}
+            title={selectedMap.size < 2 ? "Select at least 2 rows" : undefined}
           >
             Compare
           </button>
-          <button onClick={() => setSelected(new Set())} className="btn btn-sm">
+          <button onClick={() => setSelectedMap(new Map())} className="btn btn-sm">
             Cancel
           </button>
         </div>
@@ -918,7 +945,7 @@ export default function Activities() {
             <th style={{ width: "2rem" }}>
               <input
                 type="checkbox"
-                checked={activities.length > 0 && selected.size === activities.length}
+                checked={allOnPageSelected}
                 onChange={toggleSelectAll}
               />
             </th>
@@ -934,12 +961,12 @@ export default function Activities() {
         </thead>
         <tbody>
           {activities.map((a) => (
-            <tr key={a.id} className={selected.has(a.id) ? "row-selected" : ""}>
+            <tr key={a.id} className={selectedMap.has(a.id) ? "row-selected" : ""}>
               <td>
                 <input
                   type="checkbox"
-                  checked={selected.has(a.id)}
-                  onChange={() => toggleSelect(a.id)}
+                  checked={selectedMap.has(a.id)}
+                  onChange={() => toggleSelect(a)}
                 />
               </td>
               <td>{new Date(a.startDate).toLocaleDateString()}</td>

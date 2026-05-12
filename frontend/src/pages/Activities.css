@@ -1,0 +1,124 @@
+/* ---- Category palette ---------------------------------------------------
+   Shared by:
+   • cat-chip     — the multi-select filter chips in the header
+   • category-select — the in-row edit dropdown (styled as a coloured pill)
+   Mirrors the type-pill palette from Coach.css so the AI-generated
+   session pills and the user-set Category cells read as the same language.
+---------------------------------------------------------------------- */
+.cat-easy         { --cat-bg: #14532d; --cat-fg: #bbf7d0; }
+.cat-long         { --cat-bg: #1e3a8a; --cat-fg: #bfdbfe; }
+.cat-threshold    { --cat-bg: #7f1d1d; --cat-fg: #fecaca; }
+.cat-interval     { --cat-bg: #7c2d12; --cat-fg: #fed7aa; }
+.cat-warmup       { --cat-bg: #334155; --cat-fg: #cbd5e1; }
+.cat-race         { --cat-bg: #713f12; --cat-fg: #fde68a; }
+.cat-none         { --cat-bg: #1e293b; --cat-fg: #94a3b8; }
+
+/* ---- Category dropdown styled as a coloured pill ---- */
+.category-select.pill {
+  background: var(--cat-bg);
+  color: var(--cat-fg);
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+  max-width: 160px;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.category-select.pill:hover,
+.category-select.pill:focus {
+  border-color: var(--cat-fg);
+  outline: none;
+}
+.category-select.pill option {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+/* ---- Multi-select category filter chips ---- */
+.category-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.filter-label {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+.category-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.cat-chip {
+  /* base bucket-chip (from Coach.css) already sets border/font.
+     These overrides tighten the chip for the filter bar and pull in the
+     per-category palette when `is-on`. */
+  color: #94a3b8;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+.cat-chip input[type="checkbox"] {
+  /* Hide the checkbox — the palette/"is-on" style already signals state,
+     and dropping it lets 11 chips fit on a single line. The label still
+     toggles the hidden input on click. */
+  display: none;
+}
+.cat-chip.is-on {
+  background: var(--cat-bg);
+  border-color: var(--cat-fg);
+  color: var(--cat-fg);
+}
+
+/* ---- Date presets (when embedded inside the main filters card) ---- */
+.filters .date-presets {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.bulk-sep {
+  color: #475569;
+  padding: 0 0.25rem;
+}
+
+/* ---- Rep-structure editor (inline on the Activities row) ---- */
+.structure-display {
+  cursor: pointer;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  border-bottom: 1px dashed #475569;
+  padding: 0.1rem 0;
+  white-space: nowrap;
+}
+.structure-display:hover { color: #60a5fa; border-bottom-color: #60a5fa; }
+.structure-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+}
+.structure-edit select,
+.structure-edit input[type="number"] {
+  padding: 0.2rem 0.35rem;
+  font-size: 0.8rem;
+}
+
+/* ---- AI Coach panel ---- */
+.ai-coach-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.ai-coach-header {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.ai-coach-title { font-weight: 600; color: #e2e8f0; }
+.ai-coach-hint  { color: #64748b; font-size: 0.8rem; }

@@ -98,7 +98,6 @@ export interface ActivityFilterOpts {
   from?: string;
   to?: string;
   search?: string;
-  sportType?: string;
 }
 
 export const fetchFilteredActivities = (opts: ActivityFilterOpts) =>
@@ -109,7 +108,6 @@ export const fetchFilteredActivities = (opts: ActivityFilterOpts) =>
       from: opts.from || undefined,
       to: opts.to || undefined,
       search: opts.search || undefined,
-      sportType: opts.sportType || undefined,
     }),
   });
 
@@ -133,6 +131,22 @@ export const getAIInsight = (req: AIInsightRequest) =>
   request<AIInsightResponse>("/api/ai/insights", {
     method: "POST",
     body: JSON.stringify(req),
+  });
+
+// Narrate a chart the user just rendered. Each point already encodes one
+// session, so we pass the reduced data — backend doesn't re-query the DB.
+export interface PlotExplainPoint {
+  date: string;
+  avgPaceSec: number | null;
+  bestPaceSec: number | null;
+  avgHr: number | null;
+  repCount: number;
+  name: string;
+}
+export const explainPlot = (presetLabel: string, points: PlotExplainPoint[]) =>
+  request<{ answer: string }>("/api/ai/explain-plot", {
+    method: "POST",
+    body: JSON.stringify({ presetLabel, points }),
   });
 
 // Activities

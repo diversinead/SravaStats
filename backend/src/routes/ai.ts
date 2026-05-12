@@ -15,14 +15,16 @@ export interface ActivityFilterOpts {
   from?: string;
   to?: string;
   search?: string;
-  sportType?: string;
 }
 
 function buildActivityConditions(
   userId: number,
   opts: ActivityFilterOpts
 ): any[] {
-  const conditions: any[] = [eq(schema.activities.userId, userId)];
+  const conditions: any[] = [
+    eq(schema.activities.userId, userId),
+    eq(schema.activities.sportType, "Run"),
+  ];
 
   if (opts.categories && opts.categories.length > 0) {
     const named = opts.categories.filter((c) => c && c !== "__uncategorised__");
@@ -36,9 +38,6 @@ function buildActivityConditions(
     }
     if (clauses.length === 1) conditions.push(clauses[0]);
     else if (clauses.length > 1) conditions.push(or(...clauses));
-  }
-  if (opts.sportType) {
-    conditions.push(eq(schema.activities.sportType, opts.sportType));
   }
   if (opts.search) {
     conditions.push(like(schema.activities.name, `%${opts.search}%`));
@@ -130,7 +129,7 @@ function fetchLapsByActivityIds(ids: number[]) {
 // this is the data source for the table on the AI Coach page.
 router.post("/activities", requireAuth, async (req, res) => {
   const userId = (req as any).userId as number;
-  const { categories, from, to, search, sportType } = req.body as
+  const { categories, from, to, search } = req.body as
     ActivityFilterOpts;
 
   try {
@@ -139,7 +138,6 @@ router.post("/activities", requireAuth, async (req, res) => {
       from,
       to,
       search,
-      sportType,
     });
 
     const allMatching = db
@@ -239,8 +237,8 @@ Key data notes:
 - Distance is in metres. Convert to km by dividing by 1000.
 - movingTime is in seconds. Convert to minutes/hours for display.
 - dayOfWeek is the local day the session was performed.
-- sessionType values: easy, long, interval, threshold, warmup, crosstraining, race
-- trainingCategory is the athlete's own label. Values: "Easy Run", "Recovery Run", "Long Run", "Threshold", "Marathon Session", "Intervals", "Race", "WU/CD", "Cross Training", "Heat Run", "Treadmill" (or null if uncategorised)
+- sessionType values: easy, long, interval, threshold, warmup, race
+- trainingCategory is the athlete's own label. Values: "Easy Run", "Recovery Run", "Long Run", "Threshold", "Marathon Session", "Intervals", "Race", "WU/CD", "Heat Run", "Treadmill" (or null if uncategorised)
 - laps array contains per-rep / per-km data. lapType="split" means Strava's
   per-km auto-split (continuous threshold/easy/long); lapType=null means
   user-pressed lap (interval rep boundaries).
@@ -294,6 +292,82 @@ FORMAT for visual readability (rendered as styled markdown):
     });
   } catch (err: any) {
     console.error("AI insights error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/ai/explain-plot
+// Narrate the trend in a chart the user just rendered. The chart has already
+// reduced the data to one point per session, so this endpoint sends those
+// reduced points only — no DB lookup, no full activity blob.
+router.post("/explain-plot", requireAuth, async (req, res) => {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const { presetLabel, points } = req.body as {
+    presetLabel: string;
+    points: Array<{
+      date: string;
+      avgPaceSec: number | null;
+      bestPaceSec: number | null;
+      avgHr: number | null;
+      repCount: number;
+      name: string;
+    }>;
+  };
+
+  if (!presetLabel || !Array.isArray(points) || points.length === 0) {
+    res.status(400).json({ error: "presetLabel and non-empty points required" });
+    return;
+  }
+
+  const formatPace = (sec: number | null): string => {
+    if (sec == null) return "-";
+    const m = Math.floor(sec / 60);
+    const s = Math.round(sec - m * 60);
+    return `${m}:${s.toString().padStart(2, "0")}/km`;
+  };
+
+  const lines = points.map((p) => {
+    const parts: string[] = [`${p.date}`];
+    if (p.avgPaceSec != null) parts.push(`avg ${formatPace(p.avgPaceSec)}`);
+    if (p.bestPaceSec != null) parts.push(`best ${formatPace(p.bestPaceSec)}`);
+    if (p.avgHr != null) parts.push(`HR ${Math.round(p.avgHr)}`);
+    if (p.repCount > 1) parts.push(`${p.repCount} reps`);
+    parts.push(`(${p.name})`);
+    return `- ${parts.join(" | ")}`;
+  });
+
+  const systemPrompt = `You are an expert running coach commenting on a chart the athlete just rendered.
+
+The chart reduces each training session to one point. Your job is to narrate
+the trend in 3-5 short lines.
+
+FORMAT (rendered as markdown):
+- Open with a 1-line **TL;DR** (bold) — improving / flat / regressing, with a number.
+- Then 2-3 bullets covering: notable outliers or step-changes (mention the date), pace vs HR relationship if both are present, and one actionable observation if one is obvious.
+- Wrap numbers in backticks: \`3:15/km\`, \`8 reps\`, \`-12s\`, \`162 bpm\`.
+- Be concise — the chart already shows the data; you're adding interpretation.
+- Use realistic competitive-runner numbers (athlete runs threshold around 3:30-3:40/km).
+- Don't list every point; pick the headlines.`;
+
+  const userPrompt = `Chart: ${presetLabel}
+Sessions (oldest → newest):
+${lines.join("\n")}
+
+Briefly explain what this trend shows.`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4.1-mini",
+      max_tokens: 600,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+    const answer = response.choices[0]?.message?.content ?? "";
+    res.json({ answer });
+  } catch (err: any) {
+    console.error("AI explain-plot error:", err);
     res.status(500).json({ error: err.message });
   }
 });

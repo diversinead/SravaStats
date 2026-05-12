@@ -26,11 +26,11 @@ router.get("/", requireAuth, (req, res) => {
   const sortBy = (req.query.sort_by as string) || "date";
   const sortColumn = SORT_COLUMNS[sortBy as keyof typeof SORT_COLUMNS] || SORT_COLUMNS.date;
 
-  const conditions = [eq(schema.activities.userId, userId)];
+  const conditions = [
+    eq(schema.activities.userId, userId),
+    eq(schema.activities.sportType, "Run"),
+  ];
 
-  if (req.query.sport_type) {
-    conditions.push(eq(schema.activities.sportType, req.query.sport_type as string));
-  }
   const categoryCond = buildCategoryCondition(req.query.category);
   if (categoryCond) conditions.push(categoryCond);
   if (req.query.from) {
